@@ -145,9 +145,72 @@
     });
   }
 
+  const money = (value) => Math.abs(Number(value || 0)).toLocaleString('en-US', {
+    style: 'currency', currency: 'USD', minimumFractionDigits: 2,
+  });
+
+  function knownNetSpending(month, cfg) {
+    let tracked = 0;
+    const startDay = Number(cfg?.trackingStartDay || 1);
+    Object.entries(latestState?.dailySpending || {}).forEach(([date, entry]) => {
+      if (!date.startsWith(`${month}-`) || Number(date.slice(-2)) < startDay) return;
+      tracked += Number(entry?.amount || 0) - Number(entry?.refund || 0);
+    });
+    const earlier = cfg?.trackingStartMode === 'actual' ? Number(cfg?.priorNetSpending || 0) : 0;
+    return Math.round((tracked + earlier + Number.EPSILON) * 100) / 100;
+  }
+
+  function enhanceMidMonthLabels() {
+    if (!latestState) return;
+    const current = currentMonth();
+    const todayCfg = latestState.months?.[current];
+    if (todayCfg && Number(todayCfg.trackingStartDay || 1) > 1 && document.querySelector('#pageEyebrow')?.textContent.trim() === 'TODAY') {
+      const net = knownNetSpending(current, todayCfg);
+      const summaryLabels = [...document.querySelectorAll('#view .summary-grid .metric-label')];
+      const remaining = summaryLabels.find((el) => el.textContent.trim() === 'Money remaining');
+      const foot = remaining?.closest('.metric-card')?.querySelector('.metric-foot');
+      const startDate = dateFor(current, Number(todayCfg.trackingStartDay));
+      if (foot) {
+        const next = net < 0 ? `${money(net)} net gain since ${startDate}` : `${money(net)} net spending since ${startDate}`;
+        if (foot.textContent !== next) foot.textContent = next;
+      }
+      const progress = document.querySelector('#view .section-card .progress-meta span:first-child');
+      if (progress) {
+        const next = net < 0 ? `${money(net)} net gain since tracking began` : `${money(net)} net spending since tracking began`;
+        if (progress.textContent !== next) progress.textContent = next;
+      }
+    }
+
+    const historyMonth = document.querySelector('#historyMonthPicker')?.value;
+    const historyCfg = historyMonth ? latestState.months?.[historyMonth] : null;
+    if (historyCfg && Number(historyCfg.trackingStartDay || 1) > 1) {
+      const net = knownNetSpending(historyMonth, historyCfg);
+      const labels = [...document.querySelectorAll('#view .summary-grid .metric-label')];
+      const spending = labels.find((el) => ['Spent', 'Net spending'].includes(el.textContent.trim()));
+      const card = spending?.closest('.metric-card');
+      const value = card?.querySelector('.metric-value');
+      const foot = card?.querySelector('.metric-foot');
+      if (spending) {
+        const nextLabel = net < 0 ? 'Net gain' : 'Net spending';
+        if (spending.textContent !== nextLabel) spending.textContent = nextLabel;
+      }
+      if (value) {
+        const next = money(net);
+        if (value.textContent !== next) value.textContent = next;
+      }
+      if (foot) {
+        const next = historyCfg.trackingStartMode === 'actual'
+          ? 'Known net spending, including your pre-start total'
+          : `Recorded since tracking began on day ${historyCfg.trackingStartDay}`;
+        if (foot.textContent !== next) foot.textContent = next;
+      }
+    }
+  }
+
   function enhance() {
     enhanceMonth();
     enhanceCalendarGuards();
+    enhanceMidMonthLabels();
   }
 
   const observer = new MutationObserver(() => queueMicrotask(enhance));
