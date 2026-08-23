@@ -1,11 +1,11 @@
 {
   "name": "budget-tracker",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "type": "module",
   "scripts": {
     "test": "node --test",
-    "check": "node --check app.js && node --check refunds.js && node --check engine.js && node --check netlify/functions/auth.mjs && node --check netlify/functions/budget.mjs && node --check netlify/lib/auth.mjs && node --check sw.js"
+    "check": "node --check app.js && node --check refunds.js && node --check start.js && node --check engine.js && node --check netlify/functions/auth.mjs && node --check netlify/functions/budget.mjs && node --check netlify/lib/auth.mjs && node --check sw.js"
   },
   "dependencies": {
     "@netlify/blobs": "10.7.13"

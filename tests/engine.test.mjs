@@ -4,7 +4,7 @@ import { calculateDay, calculateMonth, dailyAmounts, daysInMonth } from '../engi
 
 function state() {
   return {
-    version: 2,
+    version: 3,
     recurringExpenses: [],
     months: {
       '2026-09': {
@@ -12,6 +12,25 @@ function state() {
         housing: 4000,
         reinvestment: 7000,
         expenses: [{ id: 'x', name: 'Other fixed', category: 'Bills', amount: 1000 }],
+      },
+    },
+    dailySpending: {},
+  };
+}
+
+function augustState() {
+  return {
+    version: 3,
+    recurringExpenses: [],
+    months: {
+      '2026-08': {
+        income: 15100,
+        housing: 4000,
+        reinvestment: 7000,
+        expenses: [{ id: 'x', name: 'Other fixed', category: 'Bills', amount: 1000 }],
+        trackingStartDay: 23,
+        trackingStartMode: 'fresh',
+        priorNetSpending: 0,
       },
     },
     dailySpending: {},
@@ -95,10 +114,63 @@ test('later refund increases the month when it actually arrives', () => {
   assert.equal(october.endingCarry, 5980);
 });
 
-test('old entries without refund remain backward compatible', () => {
+test('old entries and old month configs remain backward compatible', () => {
   const data = state();
   data.dailySpending['2026-09-01'] = { amount: 80 };
   assert.equal(calculateDay(data, '2026-09-02').availableToday, 120);
+  assert.equal(calculateMonth(data, '2026-09').trackingStartDay, 1);
+});
+
+test('fresh mid-month start does not create a fake accumulated windfall', () => {
+  const data = augustState();
+  const first = calculateDay(data, '2026-08-23');
+  assert.equal(first.baseDaily, 100);
+  assert.equal(first.availableToday, 100);
+  assert.equal(first.trackingStarted, true);
+  assert.equal(calculateDay(data, '2026-08-22').trackingStarted, false);
+});
+
+test('fresh mid-month start still accumulates unused money after tracking begins', () => {
+  const data = augustState();
+  data.dailySpending['2026-08-23'] = { amount: 0 };
+  assert.equal(calculateDay(data, '2026-08-24').availableToday, 200);
+  data.dailySpending['2026-08-24'] = { amount: 160 };
+  assert.equal(calculateDay(data, '2026-08-25').availableToday, 140);
+});
+
+test('fresh mid-month start only carries the budget remaining from the start date', () => {
+  const data = augustState();
+  const month = calculateMonth(data, '2026-08');
+  assert.equal(month.spendable, 3100);
+  assert.equal(month.openingAdjustment, 2200);
+  assert.equal(month.endingCarry, 900);
+});
+
+test('actual mid-month start can reconstruct the real earlier-month spending', () => {
+  const data = augustState();
+  data.months['2026-08'].trackingStartMode = 'actual';
+  data.months['2026-08'].priorNetSpending = 1800;
+  const day = calculateDay(data, '2026-08-23');
+  assert.equal(day.availableToday, 500);
+  assert.equal(calculateMonth(data, '2026-08').endingCarry, 1300);
+});
+
+test('starting on day one behaves exactly like the original tracker', () => {
+  const data = state();
+  data.months['2026-09'].trackingStartDay = 1;
+  data.months['2026-09'].trackingStartMode = 'fresh';
+  assert.equal(calculateDay(data, '2026-09-01').availableToday, 100);
+  assert.equal(calculateMonth(data, '2026-09').openingAdjustment, 0);
+});
+
+test('mid-month carry flows correctly into the next month', () => {
+  const data = augustState();
+  data.dailySpending['2026-08-23'] = { amount: 100 };
+  data.dailySpending['2026-08-24'] = { amount: 100 };
+  data.months['2026-09'] = { income: 15000, housing: 4000, reinvestment: 7000, expenses: [{ id: 'x', name: 'Other fixed', category: 'Bills', amount: 1000 }] };
+  assert.equal(calculateMonth(data, '2026-08').endingCarry, 700);
+  assert.equal(calculateMonth(data, '2026-09').carryIn, 700);
+  assert.equal(calculateMonth(data, '2026-09').spendable, 3700);
 });
 
 test('calendar math handles leap years', () => {

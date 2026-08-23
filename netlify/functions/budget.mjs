@@ -9,12 +9,18 @@ const DATE_RE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
 
 function freshState() {
   const now = new Date().toISOString();
-  return { version: 2, createdAt: now, updatedAt: now, recurringExpenses: [], months: {}, dailySpending: {} };
+  return { version: 3, createdAt: now, updatedAt: now, recurringExpenses: [], months: {}, dailySpending: {} };
 }
 
 function finiteMoney(value, label) {
   const number = Number(value ?? 0);
   if (!Number.isFinite(number) || number < 0 || number > 1_000_000_000) throw new Error(`${label} must be a valid non-negative number.`);
+  return Math.round((number + Number.EPSILON) * 100) / 100;
+}
+
+function signedMoney(value, label) {
+  const number = Number(value ?? 0);
+  if (!Number.isFinite(number) || Math.abs(number) > 1_000_000_000) throw new Error(`${label} must be a valid number.`);
   return Math.round((number + Number.EPSILON) * 100) / 100;
 }
 
@@ -41,6 +47,23 @@ function cleanDailyEntry(entry, preserveTimestamp = false) {
   };
 }
 
+function daysInMonth(monthKey) {
+  const [year, month] = monthKey.split('-').map(Number);
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
+function cleanTracking(cfg, month) {
+  const maxDay = daysInMonth(month);
+  const rawDay = Number(cfg?.trackingStartDay ?? 1);
+  if (!Number.isFinite(rawDay) || rawDay < 1 || rawDay > maxDay || !Number.isInteger(rawDay)) throw new Error('Tracking start day is invalid.');
+  const trackingStartDay = rawDay;
+  const trackingStartMode = cfg?.trackingStartMode === 'actual' ? 'actual' : 'fresh';
+  const priorNetSpending = trackingStartDay === 1 || trackingStartMode === 'fresh'
+    ? 0
+    : signedMoney(cfg?.priorNetSpending, 'Prior net spending');
+  return { trackingStartDay, trackingStartMode, priorNetSpending };
+}
+
 function validateDateKey(date) {
   if (!DATE_RE.test(date)) throw new Error('Invalid date.');
   const [year, month, day] = date.split('-').map(Number);
@@ -50,7 +73,7 @@ function validateDateKey(date) {
 
 function applyMutation(state, action, payload = {}) {
   const next = structuredClone(state || freshState());
-  next.version = 2;
+  next.version = 3;
   next.months ||= {};
   next.dailySpending ||= {};
   next.recurringExpenses ||= [];
@@ -58,16 +81,24 @@ function applyMutation(state, action, payload = {}) {
   if (action === 'saveMonth') {
     const month = cleanText(payload.month, 7);
     if (!MONTH_RE.test(month)) throw new Error('Invalid month.');
+    const tracking = cleanTracking(payload, month);
     next.months[month] = {
       income: finiteMoney(payload.income, 'Income'),
       housing: finiteMoney(payload.housing, 'Housing'),
       reinvestment: finiteMoney(payload.reinvestment, 'Reinvestment'),
       expenses: Array.isArray(payload.expenses) ? payload.expenses.map(cleanExpense) : [],
+      ...tracking,
       updatedAt: new Date().toISOString(),
     };
   } else if (action === 'saveDaily') {
     const date = cleanText(payload.date, 10);
     validateDateKey(date);
+    const month = date.slice(0, 7);
+    const cfg = next.months[month];
+    if (!cfg) throw new Error('Set up this month before logging daily spending.');
+    const startDay = Number(cfg.trackingStartDay || 1);
+    const day = Number(date.slice(-2));
+    if (day < startDay) throw new Error('That date is before this month’s tracking start date.');
     next.dailySpending[date] = cleanDailyEntry(payload);
   } else if (action === 'deleteDaily') {
     const date = cleanText(payload.date, 10);
@@ -88,16 +119,21 @@ function applyMutation(state, action, payload = {}) {
     validated.recurringExpenses = Array.isArray(imported.recurringExpenses) ? imported.recurringExpenses.map(cleanExpense) : [];
     for (const [month, cfg] of Object.entries(imported.months || {})) {
       if (!MONTH_RE.test(month)) continue;
+      let tracking;
+      try { tracking = cleanTracking(cfg || {}, month); } catch { tracking = { trackingStartDay: 1, trackingStartMode: 'fresh', priorNetSpending: 0 }; }
       validated.months[month] = {
         income: finiteMoney(cfg?.income, 'Income'),
         housing: finiteMoney(cfg?.housing, 'Housing'),
         reinvestment: finiteMoney(cfg?.reinvestment, 'Reinvestment'),
         expenses: Array.isArray(cfg?.expenses) ? cfg.expenses.map(cleanExpense) : [],
+        ...tracking,
         updatedAt: cleanText(cfg?.updatedAt, 40) || new Date().toISOString(),
       };
     }
     for (const [date, entry] of Object.entries(imported.dailySpending || {})) {
       try { validateDateKey(date); } catch { continue; }
+      const cfg = validated.months[date.slice(0, 7)];
+      if (cfg && Number(date.slice(-2)) < Number(cfg.trackingStartDay || 1)) continue;
       validated.dailySpending[date] = cleanDailyEntry(entry, true);
     }
     validated.updatedAt = new Date().toISOString();
