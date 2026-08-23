@@ -160,6 +160,45 @@
     return Math.round((tracked + earlier + Number.EPSILON) * 100) / 100;
   }
 
+  function missingPastEntries() {
+    if (!latestState) return [];
+    const today = currentDate();
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yesterdayKey = `${yesterday.getFullYear()}-${pad(yesterday.getMonth() + 1)}-${pad(yesterday.getDate())}`;
+    const missing = [];
+    Object.entries(latestState.months || {}).sort(([a], [b]) => a.localeCompare(b)).forEach(([month, cfg]) => {
+      if (month > currentMonth()) return;
+      const startDay = Number(cfg?.trackingStartDay || 1);
+      const endDay = month === currentMonth() ? Number(yesterdayKey.slice(-2)) : dim(month);
+      if (month === currentMonth() && yesterdayKey.slice(0, 7) !== month) return;
+      for (let day = startDay; day <= endDay; day += 1) {
+        const date = dateFor(month, day);
+        if (date >= today) break;
+        if (!latestState.dailySpending?.[date]) missing.push(date);
+      }
+    });
+    return missing;
+  }
+
+  function enhanceMissingEntryWarning() {
+    if (document.querySelector('#pageEyebrow')?.textContent.trim() !== 'TODAY') return;
+    const hero = document.querySelector('#view .hero-grid');
+    if (!hero) return;
+    const existing = document.querySelector('#missingEntryWarning');
+    const missing = missingPastEntries();
+    if (!missing.length) { existing?.remove(); return; }
+    if (existing) return;
+    const warning = document.createElement('article');
+    warning.id = 'missingEntryWarning';
+    warning.className = 'card section-card';
+    warning.style.marginTop = '0';
+    const preview = missing.slice(0, 3).join(', ');
+    warning.innerHTML = `<div class="callout warn" style="margin:0"><span class="callout-dot"></span><div><strong>${missing.length} past tracked day${missing.length === 1 ? '' : 's'} still need an entry</strong><span>Your current allowance temporarily assumes $0 spent on ${preview}${missing.length > 3 ? ' and more' : ''}. Enter $0 for a true no-spend day, or fill in the real amount in History, to keep the balance exact.</span></div></div><div class="form-actions" style="margin-top:10px"><button id="openMissingHistory" class="button ghost" type="button">Open History</button></div>`;
+    hero.insertAdjacentElement('beforebegin', warning);
+    document.querySelector('#openMissingHistory')?.addEventListener('click', () => document.querySelector('[data-view="history"]')?.click());
+  }
+
   function enhanceMidMonthLabels() {
     if (!latestState) return;
     const current = currentMonth();
@@ -211,6 +250,7 @@
     enhanceMonth();
     enhanceCalendarGuards();
     enhanceMidMonthLabels();
+    enhanceMissingEntryWarning();
   }
 
   const observer = new MutationObserver(() => queueMicrotask(enhance));
