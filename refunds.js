@@ -1,6 +1,8 @@
 (() => {
   const originalFetch = window.fetch.bind(window);
-  let latestState = null;
+  let latestState = (() => {
+    try { return JSON.parse(localStorage.getItem('budget_tracker_last_state') || 'null'); } catch { return null; }
+  })();
 
   const money = (value) => Math.abs(Number(value || 0)).toLocaleString('en-US', {
     style: 'currency', currency: 'USD', minimumFractionDigits: 2,
