@@ -1,6 +1,8 @@
 (() => {
   const originalFetch = window.fetch.bind(window);
-  let latestState = null;
+  let latestState = (() => {
+    try { return JSON.parse(localStorage.getItem('budget_tracker_last_state') || 'null'); } catch { return null; }
+  })();
 
   const pad = (n) => String(n).padStart(2, '0');
   const currentMonth = () => {
@@ -122,10 +124,41 @@
       } else {
         explain.textContent = `Fresh-start mode: days 1–${day - 1} are treated as already on pace, not as $0-spend days. Your first tracked day starts with one normal daily allowance, then unused money rolls forward from there.`;
       }
+      queueMicrotask(enhanceMonthPreview);
     };
     dateInput.addEventListener('change', update);
     document.querySelector('#trackingStartMode').addEventListener('change', update);
     update();
+  }
+
+  function enhanceMonthPreview() {
+    const panel = document.querySelector('#trackingStartPanel');
+    const preview = document.querySelector('#monthPreview');
+    const month = document.querySelector('#monthPicker')?.value;
+    if (!panel || !preview || !month) return;
+    const date = document.querySelector('#trackingStartDate')?.value;
+    const startDay = date?.startsWith(`${month}-`) ? Number(date.slice(-2)) : 1;
+    const mode = startDay === 1 ? 'fresh' : (document.querySelector('#trackingStartMode')?.value === 'actual' ? 'actual' : 'fresh');
+    const income = Number(document.querySelector('#incomeInput')?.value || 0);
+    const housing = Number(document.querySelector('#housingInput')?.value || 0);
+    const reinvestment = Number(document.querySelector('#reinvestInput')?.value || 0);
+    let other = 0;
+    document.querySelectorAll('#monthExpenses [data-field="amount"]').forEach((input) => { other += Number(input.value || 0); });
+    const carryCell = [...preview.querySelectorAll('.preview-cell')].find((cell) => cell.querySelector('span')?.textContent.trim() === 'CARRY IN');
+    const carryText = carryCell?.querySelector('strong')?.textContent || '$0';
+    const carryIn = Number(carryText.replace(/[^0-9.-]/g, '')) || 0;
+    const spendable = income - housing - other - reinvestment + carryIn;
+    const base = spendable / dim(month);
+    const prior = mode === 'actual' ? Number(document.querySelector('#priorNetSpending')?.value || 0) : base * Math.max(0, startDay - 1);
+    const fromStart = Math.round((spendable - prior + Number.EPSILON) * 100) / 100;
+    let cell = document.querySelector('#trackingStartPreview');
+    if (!cell) {
+      cell = document.createElement('div');
+      cell.id = 'trackingStartPreview';
+      cell.className = 'preview-cell';
+      preview.appendChild(cell);
+    }
+    cell.innerHTML = `<span>${startDay === 1 ? 'AVAILABLE THIS MONTH' : 'AVAILABLE FROM START'}</span><strong>${fromStart < 0 ? '-' : ''}${money(fromStart)}</strong>`;
   }
 
   function enhanceCalendarGuards() {
@@ -224,6 +257,12 @@
     const historyCfg = historyMonth ? latestState.months?.[historyMonth] : null;
     if (historyCfg && Number(historyCfg.trackingStartDay || 1) > 1) {
       const net = knownNetSpending(historyMonth, historyCfg);
+      const historyHead = document.querySelector('#view .form-card .section-head p');
+      if (historyHead) {
+        const startDate = dateFor(historyMonth, Number(historyCfg.trackingStartDay));
+        const nextHead = `Tracking began ${startDate} · ${net < 0 ? `${money(net)} recorded net gain` : `${money(net)} recorded net spending`} since start`;
+        if (historyHead.textContent !== nextHead) historyHead.textContent = nextHead;
+      }
       const labels = [...document.querySelectorAll('#view .summary-grid .metric-label')];
       const spending = labels.find((el) => ['Spent', 'Net spending'].includes(el.textContent.trim()));
       const card = spending?.closest('.metric-card');
@@ -248,6 +287,7 @@
 
   function enhance() {
     enhanceMonth();
+    enhanceMonthPreview();
     enhanceCalendarGuards();
     enhanceMidMonthLabels();
     enhanceMissingEntryWarning();
