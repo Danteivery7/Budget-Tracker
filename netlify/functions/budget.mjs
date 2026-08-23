@@ -82,6 +82,12 @@ function applyMutation(state, action, payload = {}) {
     const month = cleanText(payload.month, 7);
     if (!MONTH_RE.test(month)) throw new Error('Invalid month.');
     const tracking = cleanTracking(payload, month);
+    const conflictingEntry = Object.keys(next.dailySpending || {}).find((date) =>
+      date.startsWith(`${month}-`) && Number(date.slice(-2)) < tracking.trackingStartDay
+    );
+    if (conflictingEntry) {
+      throw new Error(`Tracking cannot start after an existing entry (${conflictingEntry}). Delete that entry or choose an earlier start date.`);
+    }
     next.months[month] = {
       income: finiteMoney(payload.income, 'Income'),
       housing: finiteMoney(payload.housing, 'Housing'),
