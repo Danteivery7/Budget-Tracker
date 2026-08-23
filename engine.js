@@ -1,5 +1,5 @@
 export const DEFAULT_STATE = {
-  version: 1,
+  version: 2,
   createdAt: null,
   updatedAt: null,
   recurringExpenses: [],
@@ -31,14 +31,12 @@ export function daysInMonth(monthKey) {
 
 export function previousMonthKey(monthKey) {
   const [year, month] = monthKey.split('-').map(Number);
-  const d = new Date(year, month - 2, 1);
-  return monthKeyFromDate(d);
+  return monthKeyFromDate(new Date(year, month - 2, 1));
 }
 
 export function nextMonthKey(monthKey) {
   const [year, month] = monthKey.split('-').map(Number);
-  const d = new Date(year, month, 1);
-  return monthKeyFromDate(d);
+  return monthKeyFromDate(new Date(year, month, 1));
 }
 
 export function monthLabel(monthKey, locale = 'en-US') {
@@ -50,12 +48,30 @@ export function sumExpenses(expenses = []) {
   return roundMoney(expenses.reduce((sum, item) => sum + Number(item.amount || 0), 0));
 }
 
-export function monthSpendTotal(data, monthKey) {
-  let total = 0;
+export function dailyAmounts(entry = {}) {
+  const spent = roundMoney(Math.max(0, Number(entry?.amount || 0)));
+  const refunded = roundMoney(Math.max(0, Number(entry?.refund || 0)));
+  return { spent, refunded, net: roundMoney(spent - refunded) };
+}
+
+function monthEntryTotals(data, monthKey) {
+  let grossSpent = 0;
+  let refunds = 0;
   for (const [date, entry] of Object.entries(data.dailySpending || {})) {
-    if (date.startsWith(`${monthKey}-`)) total += Number(entry.amount || 0);
+    if (!date.startsWith(`${monthKey}-`)) continue;
+    const amounts = dailyAmounts(entry);
+    grossSpent += amounts.spent;
+    refunds += amounts.refunded;
   }
-  return roundMoney(total);
+  return {
+    grossSpent: roundMoney(grossSpent),
+    refunds: roundMoney(refunds),
+    netSpent: roundMoney(grossSpent - refunds),
+  };
+}
+
+export function monthSpendTotal(data, monthKey) {
+  return monthEntryTotals(data, monthKey).netSpent;
 }
 
 export function calculateCarryInto(data, targetMonthKey) {
@@ -78,7 +94,7 @@ export function spendBeforeDay(data, monthKey, dayNumber) {
   let total = 0;
   for (let day = 1; day < dayNumber; day += 1) {
     const key = `${monthKey}-${String(day).padStart(2, '0')}`;
-    total += Number(data.dailySpending?.[key]?.amount || 0);
+    total += dailyAmounts(data.dailySpending?.[key]).net;
   }
   return roundMoney(total);
 }
@@ -87,14 +103,14 @@ export function spendThroughDay(data, monthKey, dayNumber) {
   let total = 0;
   for (let day = 1; day <= dayNumber; day += 1) {
     const key = `${monthKey}-${String(day).padStart(2, '0')}`;
-    total += Number(data.dailySpending?.[key]?.amount || 0);
+    total += dailyAmounts(data.dailySpending?.[key]).net;
   }
   return roundMoney(total);
 }
 
-export function dailyStatus(availableBefore, spent, afterBalance) {
-  if (afterBalance < -0.005 || spent > Math.max(0, availableBefore) + 0.005) return 'red';
-  if (availableBefore > 0 && spent >= availableBefore * 0.9) return 'yellow';
+export function dailyStatus(availableBefore, netSpent, afterBalance) {
+  if (afterBalance < -0.005 || netSpent > Math.max(0, availableBefore) + 0.005) return 'red';
+  if (netSpent > 0 && availableBefore > 0 && netSpent >= availableBefore * 0.9) return 'yellow';
   return 'green';
 }
 
@@ -115,8 +131,8 @@ export function calculateDay(data, dateKey) {
   const baseDaily = roundMoney(baseExact);
   const beforeSpend = spendBeforeDay(data, monthKey, day);
   const availableBefore = roundMoney(baseExact * day - beforeSpend);
-  const spent = roundMoney(Number(data.dailySpending?.[dateKey]?.amount || 0));
-  const afterBalance = roundMoney(availableBefore - spent);
+  const amounts = dailyAmounts(data.dailySpending?.[dateKey]);
+  const afterBalance = roundMoney(availableBefore - amounts.net);
   const recoveryDays = baseExact > 0 && afterBalance < 0 ? Math.ceil(Math.abs(afterBalance) / baseExact) : 0;
   const tomorrowRaw = day < dim ? roundMoney(baseExact * (day + 1) - spendThroughDay(data, monthKey, day)) : null;
 
@@ -132,18 +148,21 @@ export function calculateDay(data, dateKey) {
     beforeSpend,
     rawAvailable: availableBefore,
     availableToday: Math.max(0, availableBefore),
-    spentToday: spent,
+    spentToday: amounts.spent,
+    refundedToday: amounts.refunded,
+    netToday: amounts.net,
     afterTodayBalance: afterBalance,
     recoveryDays,
     tomorrowRaw,
     tomorrowAvailable: tomorrowRaw == null ? null : Math.max(0, tomorrowRaw),
-    status: dailyStatus(availableBefore, spent, afterBalance),
+    status: dailyStatus(availableBefore, amounts.net, afterBalance),
   };
 }
 
 export function calculateMonth(data, monthKey) {
   const cfg = data.months?.[monthKey];
   const carryIn = calculateCarryInto(data, monthKey);
+  const totals = monthEntryTotals(data, monthKey);
   if (!cfg) {
     return {
       configured: false,
@@ -155,8 +174,10 @@ export function calculateMonth(data, monthKey) {
       fixedTotal: 0,
       reinvestment: 0,
       spendable: carryIn,
-      spent: monthSpendTotal(data, monthKey),
-      endingCarry: roundMoney(carryIn - monthSpendTotal(data, monthKey)),
+      spent: totals.netSpent,
+      grossSpent: totals.grossSpent,
+      refunds: totals.refunds,
+      endingCarry: roundMoney(carryIn - totals.netSpent),
       baseDaily: 0,
       daysInMonth: daysInMonth(monthKey),
     };
@@ -168,7 +189,6 @@ export function calculateMonth(data, monthKey) {
   const income = roundMoney(Number(cfg.income || 0));
   const reinvestment = roundMoney(Number(cfg.reinvestment || 0));
   const spendable = roundMoney(income - fixedTotal - reinvestment + carryIn);
-  const spent = monthSpendTotal(data, monthKey);
   const dim = daysInMonth(monthKey);
 
   return {
@@ -181,9 +201,11 @@ export function calculateMonth(data, monthKey) {
     fixedTotal,
     reinvestment,
     spendable,
-    spent,
-    remaining: roundMoney(spendable - spent),
-    endingCarry: roundMoney(spendable - spent),
+    spent: totals.netSpent,
+    grossSpent: totals.grossSpent,
+    refunds: totals.refunds,
+    remaining: roundMoney(spendable - totals.netSpent),
+    endingCarry: roundMoney(spendable - totals.netSpent),
     baseDaily: roundMoney(spendable / dim),
     daysInMonth: dim,
     expenses: cfg.expenses || [],
@@ -193,7 +215,6 @@ export function calculateMonth(data, monthKey) {
 export function suggestedMonthValues(data, monthKey) {
   const existing = data.months?.[monthKey];
   if (existing) return structuredClone(existing);
-
   const previousKeys = Object.keys(data.months || {}).filter((key) => key < monthKey).sort();
   const previous = previousKeys.length ? data.months[previousKeys.at(-1)] : null;
   return {
@@ -210,9 +231,7 @@ export function calendarCells(monthKey) {
   const dim = daysInMonth(monthKey);
   const cells = [];
   for (let i = 0; i < firstWeekday; i += 1) cells.push(null);
-  for (let day = 1; day <= dim; day += 1) {
-    cells.push(`${monthKey}-${String(day).padStart(2, '0')}`);
-  }
+  for (let day = 1; day <= dim; day += 1) cells.push(`${monthKey}-${String(day).padStart(2, '0')}`);
   while (cells.length % 7) cells.push(null);
   return cells;
 }
