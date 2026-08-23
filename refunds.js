@@ -84,6 +84,11 @@
       <input id="todayRefundNote" class="entry-note" type="text" maxlength="200" placeholder="Optional refund note, e.g. Steam refund" style="margin-top:8px" />
       <span class="refund-help">Refunds and reimbursements reduce that day’s net spending. If money back is larger than spending, the difference becomes extra future buffer.</span>`;
     form.insertBefore(wrap, note);
+    const refundInput = document.querySelector('#todayRefund');
+    const spendingInput = document.querySelector('#todayAmount');
+    refundInput?.addEventListener('input', () => {
+      if (Number(refundInput.value || 0) > 0 && spendingInput && spendingInput.value === '') spendingInput.value = '0';
+    });
 
     const entry = latestState?.dailySpending?.[localDateKey()];
     if (entry) {
