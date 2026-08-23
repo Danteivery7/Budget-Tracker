@@ -1,10 +1,13 @@
 (() => {
-  const originalFetch = window.fetch.bind(window);
+  const nativeFetch = window.fetch.bind(window);
   let latestState = (() => {
     try { return JSON.parse(localStorage.getItem('budget_tracker_last_state') || 'null'); } catch { return null; }
   })();
+  let monthPageSelected = null;
+  let monthPageOpen = false;
 
   const pad = (n) => String(n).padStart(2, '0');
+  const round = (value) => Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
   const currentMonth = () => {
     const d = new Date();
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
@@ -13,299 +16,510 @@
     const d = new Date();
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   };
-  const dim = (monthKey) => {
-    const [y, m] = monthKey.split('-').map(Number);
+  const daysInMonth = (monthKey) => {
+    const [y, m] = String(monthKey || '').split('-').map(Number);
+    if (!Number.isFinite(y) || !Number.isFinite(m)) return 30;
     return new Date(y, m, 0).getDate();
   };
   const dateFor = (monthKey, day) => `${monthKey}-${pad(day)}`;
+  const monthLabel = (monthKey) => {
+    const [y, m] = String(monthKey || '').split('-').map(Number);
+    if (!Number.isFinite(y) || !Number.isFinite(m)) return String(monthKey || 'Month');
+    return new Intl.DateTimeFormat('en-US', { month: 'long', year: 'numeric' }).format(new Date(y, m - 1, 1));
+  };
+  const money = (value, sign = false) => {
+    const n = Number(value || 0);
+    const abs = Math.abs(n).toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 });
+    if (!sign) return n < 0 ? `-${abs}` : abs;
+    if (n > 0) return `+${abs}`;
+    if (n < 0) return `-${abs}`;
+    return abs;
+  };
+  const moneyInput = (value) => {
+    const n = Number(value || 0);
+    return Number.isInteger(n) ? String(n) : n.toFixed(2);
+  };
+  const esc = (value) => String(value ?? '')
+    .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;').replaceAll("'", '&#039;');
+  const uid = () => globalThis.crypto?.randomUUID?.() || `expense-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
-  function settingsFromUi(month) {
-    const date = document.querySelector('#trackingStartDate')?.value;
-    const startDay = date?.startsWith(`${month}-`) ? Number(date.slice(-2)) : 1;
-    const mode = startDay === 1 ? 'fresh' : (document.querySelector('#trackingStartMode')?.value === 'actual' ? 'actual' : 'fresh');
-    const prior = mode === 'actual' ? Number(document.querySelector('#priorNetSpending')?.value || 0) : 0;
-    return { trackingStartDay: startDay, trackingStartMode: mode, priorNetSpending: prior };
+  function saveLocalState(state) {
+    latestState = state;
+    try { localStorage.setItem('budget_tracker_last_state', JSON.stringify(state)); } catch { /* storage unavailable */ }
   }
 
   window.fetch = async (input, init = {}) => {
-    let nextInit = init;
+    const response = await nativeFetch(input, init);
     const url = typeof input === 'string' ? input : input?.url || '';
-    if (url.includes('/api/budget/mutate') && typeof init.body === 'string') {
-      try {
-        const body = JSON.parse(init.body);
-        if (body?.action === 'saveMonth' && body?.payload?.month) {
-          body.payload = { ...body.payload, ...settingsFromUi(body.payload.month) };
-          nextInit = { ...init, body: JSON.stringify(body) };
-        }
-      } catch { /* keep original request */ }
-    }
-    const response = await originalFetch(input, nextInit);
     if (url.includes('/api/budget/state') || url.includes('/api/budget/mutate')) {
       try {
-        const data = await response.clone().json();
-        if (data?.state) latestState = data.state;
-      } catch { /* ignore */ }
+        const body = await response.clone().json();
+        if (body?.state) saveLocalState(body.state);
+      } catch { /* non-json or unavailable */ }
+      setTimeout(enhanceNonMonthViews, 0);
     }
     return response;
   };
 
-  function injectStyle() {
-    if (document.querySelector('#trackingStartStyles')) return;
-    const style = document.createElement('style');
-    style.id = 'trackingStartStyles';
-    style.textContent = `
-      .tracking-start-panel{margin-top:22px;padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;background:rgba(15,23,42,.35)}
-      .tracking-start-panel h3{margin:0 0 5px;font-size:1rem}.tracking-start-panel>p{margin:0 0 16px;color:var(--muted,#8f99ad);font-size:.82rem;line-height:1.45}
-      .tracking-start-grid{display:grid;grid-template-columns:1fr 1.3fr;gap:14px}.tracking-start-panel select{width:100%;min-height:46px;border-radius:12px;padding:0 12px;background:rgba(15,23,42,.65);color:inherit;border:1px solid rgba(148,163,184,.18)}
-      .tracking-explain{margin-top:12px;padding:11px 12px;border-radius:12px;background:rgba(59,130,246,.08);border:1px solid rgba(59,130,246,.16);font-size:.78rem;line-height:1.45;color:var(--muted,#a7b0c0)}
-      .pretrack-day{opacity:.35!important;cursor:not-allowed!important}.future-day{opacity:.42!important;cursor:not-allowed!important}
-      @media(max-width:700px){.tracking-start-grid{grid-template-columns:1fr}}
-    `;
-    document.head.appendChild(style);
+  function toast(message, isError = false) {
+    const el = document.querySelector('#toast');
+    if (!el) return;
+    el.textContent = message;
+    el.className = `toast show${isError ? ' error' : ''}`;
+    setTimeout(() => { if (el.textContent === message) el.className = 'toast'; }, 3200);
   }
 
-  function hasEarlierEntries(month) {
-    return Object.keys(latestState?.dailySpending || {}).some((date) => date.startsWith(`${month}-`));
+  function setSync(mode, text) {
+    const dot = document.querySelector('#syncDot');
+    const label = document.querySelector('#syncText');
+    if (dot) dot.className = `sync-dot${mode === 'busy' ? ' busy' : mode === 'error' ? ' error' : ''}`;
+    if (label) label.textContent = text || (mode === 'busy' ? 'Saving…' : mode === 'error' ? 'Sync issue' : 'Synced');
   }
 
-  function defaultDay(month, cfg) {
-    if (cfg?.trackingStartDay) return Number(cfg.trackingStartDay);
-    if (cfg && hasEarlierEntries(month)) return 1;
-    if (month === currentMonth()) return new Date().getDate();
-    return 1;
+  async function ensureState() {
+    if (latestState?.months && latestState?.dailySpending && latestState?.recurringExpenses) return latestState;
+    const response = await nativeFetch('/api/budget/state', { credentials: 'same-origin', cache: 'no-store' });
+    let body = {};
+    try { body = await response.json(); } catch { /* handled below */ }
+    if (!response.ok || !body?.state) throw new Error(body?.error || 'Could not load your budget data.');
+    saveLocalState(body.state);
+    return latestState;
   }
 
-  function enhanceMonth() {
-    const form = document.querySelector('#monthForm');
-    const picker = document.querySelector('#monthPicker');
-    if (!form || !picker || document.querySelector('#trackingStartPanel')) return;
-    injectStyle();
-    const month = picker.value;
-    if (!month) return;
-    const cfg = latestState?.months?.[month];
-    const startDay = Math.min(dim(month), Math.max(1, defaultDay(month, cfg)));
-    const mode = cfg?.trackingStartMode === 'actual' ? 'actual' : 'fresh';
-    const firstGrid = form.querySelector('.form-grid');
-    if (!firstGrid) return;
-
-    const panel = document.createElement('section');
-    panel.id = 'trackingStartPanel';
-    panel.className = 'tracking-start-panel';
-    panel.innerHTML = `
-      <h3>When should tracking begin?</h3>
-      <p>This matters only if your first month starts after day 1. It prevents untracked earlier days from being mistaken for $0-spend days.</p>
-      <div class="tracking-start-grid">
-        <div class="field"><label for="trackingStartDate">Tracking start date</label><input id="trackingStartDate" type="date" /></div>
-        <div class="field"><label for="trackingStartMode">Earlier days</label><select id="trackingStartMode"><option value="fresh">Start fresh on this date (recommended)</option><option value="actual">Use my actual earlier net spending</option></select></div>
-      </div>
-      <div id="priorNetField" class="field" style="margin-top:12px;display:none"><label for="priorNetSpending">Earlier net discretionary spending</label><div class="money-input"><span>$</span><input id="priorNetSpending" type="number" step="0.01" inputmode="decimal" value="0" /></div><small>Spending minus refunds before the tracking start date. A negative number means refunds exceeded spending.</small></div>
-      <div id="trackingExplanation" class="tracking-explain"></div>`;
-    firstGrid.insertAdjacentElement('afterend', panel);
-
-    const dateInput = document.querySelector('#trackingStartDate');
-    dateInput.min = dateFor(month, 1);
-    dateInput.max = month === currentMonth() ? currentDate() : dateFor(month, dim(month));
-    dateInput.value = dateFor(month, startDay);
-    document.querySelector('#trackingStartMode').value = startDay === 1 ? 'fresh' : mode;
-    document.querySelector('#priorNetSpending').value = Number(cfg?.priorNetSpending || 0);
-
-    const update = () => {
-      const day = Number(dateInput.value.slice(-2) || 1);
-      const select = document.querySelector('#trackingStartMode');
-      if (day === 1) select.value = 'fresh';
-      select.disabled = day === 1;
-      const actual = day > 1 && select.value === 'actual';
-      document.querySelector('#priorNetField').style.display = actual ? '' : 'none';
-      const explain = document.querySelector('#trackingExplanation');
-      if (day === 1) {
-        explain.textContent = 'Day 1 start: the tracker behaves normally from the beginning of the month.';
-      } else if (actual) {
-        explain.textContent = 'Exact mode: the tracker uses the earlier net spending you enter to reconstruct your true cumulative buffer or deficit on the start date.';
-      } else {
-        explain.textContent = `Fresh-start mode: days 1–${day - 1} are treated as already on pace, not as $0-spend days. Your first tracked day starts with one normal daily allowance, then unused money rolls forward from there.`;
-      }
-      queueMicrotask(enhanceMonthPreview);
-    };
-    dateInput.addEventListener('change', update);
-    document.querySelector('#trackingStartMode').addEventListener('change', update);
-    update();
-  }
-
-  function enhanceMonthPreview() {
-    const panel = document.querySelector('#trackingStartPanel');
-    const preview = document.querySelector('#monthPreview');
-    const month = document.querySelector('#monthPicker')?.value;
-    if (!panel || !preview || !month) return;
-    const date = document.querySelector('#trackingStartDate')?.value;
-    const startDay = date?.startsWith(`${month}-`) ? Number(date.slice(-2)) : 1;
-    const mode = startDay === 1 ? 'fresh' : (document.querySelector('#trackingStartMode')?.value === 'actual' ? 'actual' : 'fresh');
-    const income = Number(document.querySelector('#incomeInput')?.value || 0);
-    const housing = Number(document.querySelector('#housingInput')?.value || 0);
-    const reinvestment = Number(document.querySelector('#reinvestInput')?.value || 0);
-    let other = 0;
-    document.querySelectorAll('#monthExpenses [data-field="amount"]').forEach((input) => { other += Number(input.value || 0); });
-    const carryCell = [...preview.querySelectorAll('.preview-cell')].find((cell) => cell.querySelector('span')?.textContent.trim() === 'CARRY IN');
-    const carryText = carryCell?.querySelector('strong')?.textContent || '$0';
-    const carryIn = Number(carryText.replace(/[^0-9.-]/g, '')) || 0;
-    const spendable = income - housing - other - reinvestment + carryIn;
-    const base = spendable / dim(month);
-    const prior = mode === 'actual' ? Number(document.querySelector('#priorNetSpending')?.value || 0) : base * Math.max(0, startDay - 1);
-    const fromStart = Math.round((spendable - prior + Number.EPSILON) * 100) / 100;
-    let cell = document.querySelector('#trackingStartPreview');
-    if (!cell) {
-      cell = document.createElement('div');
-      cell.id = 'trackingStartPreview';
-      cell.className = 'preview-cell';
-      preview.appendChild(cell);
+  async function mutation(action, payload) {
+    setSync('busy', 'Saving…');
+    try {
+      const response = await nativeFetch('/api/budget/mutate', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action, payload }),
+      });
+      let body = {};
+      try { body = await response.json(); } catch { /* handled below */ }
+      if (response.status === 401) throw new Error('Your session expired. Refresh and unlock the tracker again.');
+      if (!response.ok || !body?.state) throw new Error(body?.error || 'Could not save the month.');
+      saveLocalState(body.state);
+      setSync('idle', 'Synced');
+      return body.state;
+    } catch (error) {
+      setSync('error', 'Sync issue');
+      throw error;
     }
-    cell.innerHTML = `<span>${startDay === 1 ? 'AVAILABLE THIS MONTH' : 'AVAILABLE FROM START'}</span><strong>${fromStart < 0 ? '-' : ''}${money(fromStart)}</strong>`;
   }
 
-  function enhanceCalendarGuards() {
-    const picker = document.querySelector('#historyMonthPicker');
-    if (!picker || !latestState) return;
-    const month = picker.value;
-    const cfg = latestState.months?.[month];
-    const startDay = Number(cfg?.trackingStartDay || 1);
-    const today = currentDate();
-    document.querySelectorAll('.calendar-day[data-date]').forEach((button) => {
-      const date = button.dataset.date;
-      const day = Number(date.slice(-2));
-      button.classList.toggle('pretrack-day', Boolean(cfg && day < startDay));
-      button.classList.toggle('future-day', date > today);
-      if (cfg && day < startDay) button.title = 'Before tracking began';
-      else if (date > today) button.title = 'Future days cannot be logged yet';
+  function sumExpenses(expenses = []) {
+    return round(expenses.reduce((sum, item) => sum + Number(item?.amount || 0), 0));
+  }
+
+  function dailyAmounts(entry = {}) {
+    const spent = Math.max(0, Number(entry?.amount || 0));
+    const refunded = Math.max(0, Number(entry?.refund || 0));
+    return { spent: round(spent), refunded: round(refunded), net: round(spent - refunded) };
+  }
+
+  function trackingSettings(cfg = {}, monthKey, spendable = 0) {
+    const dim = daysInMonth(monthKey);
+    const raw = Number(cfg?.trackingStartDay || 1);
+    const startDay = Math.min(dim, Math.max(1, Number.isFinite(raw) ? Math.trunc(raw) : 1));
+    const startMode = cfg?.trackingStartMode === 'actual' ? 'actual' : 'fresh';
+    const prior = round(Number(cfg?.priorNetSpending || 0));
+    const base = Number(spendable || 0) / dim;
+    const openingAdjustment = startDay <= 1 ? 0 : startMode === 'actual' ? prior : round(base * (startDay - 1));
+    return { startDay, startMode, priorNetSpending: prior, openingAdjustment };
+  }
+
+  function trackedTotals(state, monthKey, startDay = 1) {
+    let gross = 0;
+    let refunds = 0;
+    for (const [date, entry] of Object.entries(state?.dailySpending || {})) {
+      if (!date.startsWith(`${monthKey}-`) || Number(date.slice(-2)) < startDay) continue;
+      const a = dailyAmounts(entry);
+      gross += a.spent;
+      refunds += a.refunded;
+    }
+    return { grossSpent: round(gross), refunds: round(refunds), netSpent: round(gross - refunds) };
+  }
+
+  function carryInto(state, targetMonthKey) {
+    const keys = Object.keys(state?.months || {}).filter((key) => key < targetMonthKey).sort();
+    let carry = 0;
+    for (const key of keys) {
+      const cfg = state.months[key] || {};
+      const fixed = Number(cfg.housing || 0) + sumExpenses(cfg.expenses || []);
+      const spendable = round(Number(cfg.income || 0) - fixed - Number(cfg.reinvestment || 0) + carry);
+      const tracking = trackingSettings(cfg, key, spendable);
+      const totals = trackedTotals(state, key, tracking.startDay);
+      carry = round(spendable - tracking.openingAdjustment - totals.netSpent);
+    }
+    return round(carry);
+  }
+
+  function suggestedMonth(state, monthKey) {
+    const existing = state?.months?.[monthKey];
+    if (existing) return JSON.parse(JSON.stringify(existing));
+    const keys = Object.keys(state?.months || {}).filter((key) => key < monthKey).sort();
+    const previous = keys.length ? state.months[keys.at(-1)] : null;
+    const expenses = state?.recurringExpenses?.length ? state.recurringExpenses : (previous?.expenses || []);
+    return {
+      income: Number(previous?.income || 0),
+      housing: Number(previous?.housing || 0),
+      reinvestment: Number(previous?.reinvestment || 0),
+      expenses: JSON.parse(JSON.stringify(expenses)),
+      trackingStartDay: null,
+      trackingStartMode: 'fresh',
+      priorNetSpending: 0,
+    };
+  }
+
+  function defaultStartDay(state, monthKey, cfg) {
+    if (Number(cfg?.trackingStartDay) >= 1) return Number(cfg.trackingStartDay);
+    const hasEntry = Object.keys(state?.dailySpending || {}).some((date) => date.startsWith(`${monthKey}-`));
+    if (hasEntry) return 1;
+    return monthKey === currentMonth() ? new Date().getDate() : 1;
+  }
+
+  function setMonthChrome() {
+    document.querySelectorAll('[data-view]').forEach((button) => button.classList.toggle('active', button.dataset.view === 'month'));
+    const eyebrow = document.querySelector('#pageEyebrow');
+    const title = document.querySelector('#pageTitle');
+    if (eyebrow) eyebrow.textContent = 'MONTH';
+    if (title) title.textContent = 'Monthly setup';
+  }
+
+  function expenseRowsHtml(expenses = []) {
+    return expenses.map((item) => `
+      <div class="expense-row" data-expense-id="${esc(item?.id || uid())}">
+        <input data-field="name" type="text" maxlength="80" value="${esc(item?.name || '')}" placeholder="Expense name" aria-label="Expense name" />
+        <input data-field="category" type="text" maxlength="40" value="${esc(item?.category || '')}" placeholder="Category" aria-label="Expense category" />
+        <input data-field="amount" type="number" inputmode="decimal" min="0" step="0.01" value="${moneyInput(item?.amount)}" placeholder="0.00" aria-label="Expense amount" />
+        <button class="remove-expense" type="button" aria-label="Remove expense">×</button>
+      </div>`).join('');
+  }
+
+  function readExpenseRows(root) {
+    return [...root.querySelectorAll('.expense-row')].map((row) => ({
+      id: row.dataset.expenseId || uid(),
+      name: row.querySelector('[data-field="name"]')?.value.trim() || 'Fixed expense',
+      category: row.querySelector('[data-field="category"]')?.value.trim() || 'Other',
+      amount: Number(row.querySelector('[data-field="amount"]')?.value || 0),
+    }));
+  }
+
+  function appendExpense(root, expense = {}) {
+    const holder = document.createElement('div');
+    holder.innerHTML = expenseRowsHtml([{ id: uid(), name: '', category: '', amount: 0, ...expense }]);
+    root.appendChild(holder.firstElementChild);
+  }
+
+  function trackingValues(monthKey) {
+    const date = document.querySelector('#stableTrackingStartDate')?.value || `${monthKey}-01`;
+    const day = date.startsWith(`${monthKey}-`) ? Number(date.slice(-2)) : 1;
+    const modeEl = document.querySelector('#stableTrackingMode');
+    const mode = day <= 1 ? 'fresh' : (modeEl?.value === 'actual' ? 'actual' : 'fresh');
+    const prior = mode === 'actual' ? Number(document.querySelector('#stablePriorNet')?.value || 0) : 0;
+    return { trackingStartDay: day, trackingStartMode: mode, priorNetSpending: prior };
+  }
+
+  function refreshTrackingUi(monthKey) {
+    const date = document.querySelector('#stableTrackingStartDate');
+    const mode = document.querySelector('#stableTrackingMode');
+    const priorWrap = document.querySelector('#stablePriorWrap');
+    const explanation = document.querySelector('#stableTrackingExplanation');
+    if (!date || !mode || !priorWrap || !explanation) return;
+    const day = Number(date.value.slice(-2) || 1);
+    if (day <= 1) mode.value = 'fresh';
+    mode.disabled = day <= 1;
+    const actual = day > 1 && mode.value === 'actual';
+    priorWrap.hidden = !actual;
+    if (day <= 1) explanation.textContent = 'Tracking begins on day 1, so the month works normally from the beginning.';
+    else if (actual) explanation.textContent = 'Exact start: enter your net discretionary spending from earlier in the month so the tracker reconstructs the real buffer or deficit.';
+    else explanation.textContent = `Fresh start: days 1–${day - 1} are not counted as $0-spend days. Your first tracked day starts with one normal daily allowance.`;
+    updateMonthPreview(monthKey);
+  }
+
+  function updateMonthPreview(monthKey) {
+    const expensesEl = document.querySelector('#stableMonthExpenses');
+    const preview = document.querySelector('#stableMonthPreview');
+    if (!expensesEl || !preview || !latestState) return;
+    const income = Number(document.querySelector('#stableIncome')?.value || 0);
+    const housing = Number(document.querySelector('#stableHousing')?.value || 0);
+    const reinvestment = Number(document.querySelector('#stableReinvestment')?.value || 0);
+    const expenses = readExpenseRows(expensesEl);
+    const other = sumExpenses(expenses);
+    const carry = carryInto(latestState, monthKey);
+    const spendable = round(income - housing - other - reinvestment + carry);
+    const tracking = trackingSettings(trackingValues(monthKey), monthKey, spendable);
+    const availableFromStart = round(spendable - tracking.openingAdjustment);
+    const total = document.querySelector('#stableExpenseTotal');
+    if (total) total.textContent = money(other);
+    preview.innerHTML = `
+      <div class="preview-cell"><span>CARRY IN</span><strong>${money(carry, true)}</strong></div>
+      <div class="preview-cell"><span>FIXED COSTS</span><strong>${money(housing + other)}</strong></div>
+      <div class="preview-cell"><span>AVAILABLE FROM START</span><strong>${money(availableFromStart)}</strong></div>
+      <div class="preview-cell"><span>BASE DAILY LIMIT</span><strong>${money(spendable / daysInMonth(monthKey))}</strong></div>`;
+  }
+
+  function bindMonthPage(monthKey) {
+    const picker = document.querySelector('#stableMonthPicker');
+    const form = document.querySelector('#stableMonthForm');
+    const expensesEl = document.querySelector('#stableMonthExpenses');
+    const startDate = document.querySelector('#stableTrackingStartDate');
+    const mode = document.querySelector('#stableTrackingMode');
+    if (!picker || !form || !expensesEl || !startDate || !mode) return;
+
+    picker.addEventListener('change', () => openMonth(picker.value));
+    startDate.addEventListener('change', () => refreshTrackingUi(monthKey));
+    mode.addEventListener('change', () => refreshTrackingUi(monthKey));
+    document.querySelector('#stablePriorNet')?.addEventListener('input', () => updateMonthPreview(monthKey));
+    ['#stableIncome', '#stableHousing', '#stableReinvestment'].forEach((selector) => {
+      document.querySelector(selector)?.addEventListener('input', () => updateMonthPreview(monthKey));
     });
+    expensesEl.addEventListener('input', () => updateMonthPreview(monthKey));
+    expensesEl.addEventListener('click', (event) => {
+      const remove = event.target.closest('.remove-expense');
+      if (!remove) return;
+      remove.closest('.expense-row')?.remove();
+      updateMonthPreview(monthKey);
+    });
+    document.querySelector('#stableAddExpense')?.addEventListener('click', () => {
+      appendExpense(expensesEl);
+      updateMonthPreview(monthKey);
+      expensesEl.querySelector('.expense-row:last-child [data-field="name"]')?.focus();
+    });
+    document.querySelector('#stableUseRecurring')?.addEventListener('click', () => {
+      expensesEl.innerHTML = expenseRowsHtml(latestState?.recurringExpenses || []);
+      updateMonthPreview(monthKey);
+    });
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const payload = {
+        month: monthKey,
+        income: Number(document.querySelector('#stableIncome')?.value || 0),
+        housing: Number(document.querySelector('#stableHousing')?.value || 0),
+        reinvestment: Number(document.querySelector('#stableReinvestment')?.value || 0),
+        expenses: readExpenseRows(expensesEl),
+        ...trackingValues(monthKey),
+      };
+      try {
+        await mutation('saveMonth', payload);
+        toast(`${monthLabel(monthKey)} is set up.`);
+        setTimeout(() => window.location.reload(), 120);
+      } catch (error) {
+        toast(error.message, true);
+      }
+    });
+
+    document.querySelector('#stableDeleteMonth')?.addEventListener('click', async () => {
+      if (!confirm(`Delete the setup for ${monthLabel(monthKey)}? Daily entries will remain.`)) return;
+      try {
+        await mutation('deleteMonth', { month: monthKey });
+        toast('Month setup deleted.');
+        setTimeout(() => window.location.reload(), 120);
+      } catch (error) {
+        toast(error.message, true);
+      }
+    });
+
+    refreshTrackingUi(monthKey);
   }
 
-  const money = (value) => Math.abs(Number(value || 0)).toLocaleString('en-US', {
-    style: 'currency', currency: 'USD', minimumFractionDigits: 2,
-  });
+  async function openMonth(monthHint) {
+    if (monthPageOpen && monthHint === monthPageSelected && document.querySelector('#stableMonthForm')) return;
+    monthPageOpen = true;
+    monthPageSelected = /^\d{4}-\d{2}$/.test(monthHint || '') ? monthHint : currentMonth();
+    setMonthChrome();
+    const view = document.querySelector('#view');
+    if (!view) return;
+    view.innerHTML = '<article class="card empty-state"><h2>Loading monthly setup…</h2></article>';
+
+    try {
+      const state = await ensureState();
+      const monthKey = monthPageSelected;
+      const values = suggestedMonth(state, monthKey);
+      const cfg = state.months?.[monthKey];
+      const startDay = Math.min(daysInMonth(monthKey), Math.max(1, defaultStartDay(state, monthKey, values)));
+      const startMode = values?.trackingStartMode === 'actual' ? 'actual' : 'fresh';
+      const startDateMax = monthKey === currentMonth() ? currentDate() : dateFor(monthKey, daysInMonth(monthKey));
+      const expenses = values.expenses || [];
+
+      view.innerHTML = `
+        <article class="card form-card">
+          <div class="section-head">
+            <div><h2>Plan the month</h2><p>Set income, protected costs, reinvestment, and when tracking begins.</p></div>
+            <input id="stableMonthPicker" type="month" value="${esc(monthKey)}" aria-label="Select month" />
+          </div>
+          <form id="stableMonthForm">
+            <div class="form-grid">
+              <div class="field"><label for="stableIncome">Monthly income</label><div class="money-input"><span>$</span><input id="stableIncome" type="number" min="0" step="0.01" inputmode="decimal" value="${moneyInput(values.income)}" required /></div><small>What you expect to bring in this month.</small></div>
+              <div class="field"><label for="stableHousing">Housing / mortgage</label><div class="money-input"><span>$</span><input id="stableHousing" type="number" min="0" step="0.01" inputmode="decimal" value="${moneyInput(values.housing)}" required /></div><small>Protected housing cost for this month.</small></div>
+              <div class="field"><label for="stableReinvestment">Reinvestment target</label><div class="money-input"><span>$</span><input id="stableReinvestment" type="number" min="0" step="0.01" inputmode="decimal" value="${moneyInput(values.reinvestment)}" required /></div><small>Money kept out of discretionary spending.</small></div>
+            </div>
+
+            <div class="section-head"><div><h2>When should tracking begin?</h2><p>If you start mid-month, earlier untracked days will not be mistaken for $0-spend days.</p></div></div>
+            <div class="form-grid">
+              <div class="field"><label for="stableTrackingStartDate">Tracking start date</label><input id="stableTrackingStartDate" type="date" min="${dateFor(monthKey, 1)}" max="${startDateMax}" value="${dateFor(monthKey, startDay)}" /></div>
+              <div class="field"><label for="stableTrackingMode">Earlier days</label><select id="stableTrackingMode"><option value="fresh">Start fresh on this date</option><option value="actual">Use my actual earlier net spending</option></select></div>
+            </div>
+            <div id="stablePriorWrap" class="field" hidden><label for="stablePriorNet">Earlier net discretionary spending</label><div class="money-input"><span>$</span><input id="stablePriorNet" type="number" step="0.01" inputmode="decimal" value="${moneyInput(values.priorNetSpending || 0)}" /></div><small>Spending minus refunds before the start date. Negative is allowed if refunds exceeded spending.</small></div>
+            <div class="callout"><span class="callout-dot"></span><div><strong>Start-date handling</strong><span id="stableTrackingExplanation"></span></div></div>
+
+            <div class="section-head"><div><h2>Fixed costs this month</h2><p>This snapshot stays attached to ${esc(monthLabel(monthKey))} even if your recurring list changes later.</p></div><button id="stableUseRecurring" class="button ghost" type="button">Use current recurring list</button></div>
+            <div id="stableMonthExpenses" class="expense-list">${expenseRowsHtml(expenses)}</div>
+            <button id="stableAddExpense" class="button ghost" type="button">+ Add fixed cost</button>
+            <div class="expense-total"><span>Other fixed costs</span><strong id="stableExpenseTotal">${money(sumExpenses(expenses))}</strong></div>
+
+            <div id="stableMonthPreview" class="preview-strip"></div>
+            <div class="form-actions">
+              ${cfg ? '<button id="stableDeleteMonth" class="button danger ghost" type="button">Delete month setup</button>' : ''}
+              <button class="button primary" type="submit">Save ${esc(monthLabel(monthKey))}</button>
+            </div>
+          </form>
+        </article>`;
+      const modeEl = document.querySelector('#stableTrackingMode');
+      if (modeEl) modeEl.value = startDay === 1 ? 'fresh' : startMode;
+      bindMonthPage(monthKey);
+    } catch (error) {
+      view.innerHTML = `<article class="card empty-state"><h2>Month could not load</h2><p>${esc(error.message)}</p><button id="stableMonthRetry" class="button primary" type="button">Try again</button></article>`;
+      document.querySelector('#stableMonthRetry')?.addEventListener('click', () => { monthPageOpen = false; openMonth(monthPageSelected); });
+      toast(error.message, true);
+    }
+  }
 
   function knownNetSpending(month, cfg) {
     let tracked = 0;
     const startDay = Number(cfg?.trackingStartDay || 1);
-    Object.entries(latestState?.dailySpending || {}).forEach(([date, entry]) => {
-      if (!date.startsWith(`${month}-`) || Number(date.slice(-2)) < startDay) return;
+    for (const [date, entry] of Object.entries(latestState?.dailySpending || {})) {
+      if (!date.startsWith(`${month}-`) || Number(date.slice(-2)) < startDay) continue;
       tracked += Number(entry?.amount || 0) - Number(entry?.refund || 0);
-    });
-    const earlier = cfg?.trackingStartMode === 'actual' ? Number(cfg?.priorNetSpending || 0) : 0;
-    return Math.round((tracked + earlier + Number.EPSILON) * 100) / 100;
+    }
+    if (cfg?.trackingStartMode === 'actual') tracked += Number(cfg?.priorNetSpending || 0);
+    return round(tracked);
   }
 
   function missingPastEntries() {
     if (!latestState) return [];
     const today = currentDate();
-    const yesterday = new Date();
-    yesterday.setDate(yesterday.getDate() - 1);
-    const yesterdayKey = `${yesterday.getFullYear()}-${pad(yesterday.getMonth() + 1)}-${pad(yesterday.getDate())}`;
+    const current = currentMonth();
     const missing = [];
-    Object.entries(latestState.months || {}).sort(([a], [b]) => a.localeCompare(b)).forEach(([month, cfg]) => {
-      if (month > currentMonth()) return;
+    for (const [month, cfg] of Object.entries(latestState.months || {}).sort(([a], [b]) => a.localeCompare(b))) {
+      if (month > current) continue;
       const startDay = Number(cfg?.trackingStartDay || 1);
-      const endDay = month === currentMonth() ? Number(yesterdayKey.slice(-2)) : dim(month);
-      if (month === currentMonth() && yesterdayKey.slice(0, 7) !== month) return;
+      const endDay = month === current ? new Date().getDate() - 1 : daysInMonth(month);
       for (let day = startDay; day <= endDay; day += 1) {
         const date = dateFor(month, day);
         if (date >= today) break;
         if (!latestState.dailySpending?.[date]) missing.push(date);
       }
-    });
+    }
     return missing;
   }
 
-  function enhanceMissingEntryWarning() {
-    if (document.querySelector('#pageEyebrow')?.textContent.trim() !== 'TODAY') return;
+  function enhanceToday() {
+    if (monthPageOpen || document.querySelector('#pageEyebrow')?.textContent.trim() !== 'TODAY' || !latestState) return;
+    document.querySelectorAll('#view .callout span').forEach((span) => {
+      if (span.textContent.includes(' ahead of your earned spending pace.')) {
+        span.textContent = span.textContent.replace(' ahead of your earned spending pace.', ' over your earned spending pace.');
+      }
+    });
+
+    const current = currentMonth();
+    const cfg = latestState.months?.[current];
+    if (cfg && Number(cfg.trackingStartDay || 1) > 1) {
+      const net = knownNetSpending(current, cfg);
+      const labels = [...document.querySelectorAll('#view .summary-grid .metric-label')];
+      const remaining = labels.find((el) => el.textContent.trim() === 'Money remaining');
+      const foot = remaining?.closest('.metric-card')?.querySelector('.metric-foot');
+      if (foot) foot.textContent = net < 0 ? `${money(Math.abs(net))} net gain since tracking began` : `${money(net)} net spending since tracking began`;
+      const progress = document.querySelector('#view .section-card .progress-meta span:first-child');
+      if (progress) progress.textContent = net < 0 ? `${money(Math.abs(net))} net gain since tracking began` : `${money(net)} net spending since tracking began`;
+    }
+
+    const old = document.querySelector('#stableMissingWarning');
+    const missing = missingPastEntries();
+    if (!missing.length) { old?.remove(); return; }
+    if (old) return;
     const hero = document.querySelector('#view .hero-grid');
     if (!hero) return;
-    const existing = document.querySelector('#missingEntryWarning');
-    const missing = missingPastEntries();
-    if (!missing.length) { existing?.remove(); return; }
-    if (existing) return;
     const warning = document.createElement('article');
-    warning.id = 'missingEntryWarning';
+    warning.id = 'stableMissingWarning';
     warning.className = 'card section-card';
-    warning.style.marginTop = '0';
-    const preview = missing.slice(0, 3).join(', ');
-    warning.innerHTML = `<div class="callout warn" style="margin:0"><span class="callout-dot"></span><div><strong>${missing.length} past tracked day${missing.length === 1 ? '' : 's'} still need an entry</strong><span>Your current allowance temporarily assumes $0 spent on ${preview}${missing.length > 3 ? ' and more' : ''}. Enter $0 for a true no-spend day, or fill in the real amount in History, to keep the balance exact.</span></div></div><div class="form-actions" style="margin-top:10px"><button id="openMissingHistory" class="button ghost" type="button">Open History</button></div>`;
+    const sample = missing.slice(0, 3).join(', ');
+    warning.innerHTML = `<div class="callout warn"><span class="callout-dot"></span><div><strong>${missing.length} past tracked day${missing.length === 1 ? '' : 's'} still need an entry</strong><span>Your allowance temporarily assumes $0 spent on ${sample}${missing.length > 3 ? ' and more' : ''}. Enter $0 for a true no-spend day or enter the real amount in History.</span></div></div>`;
     hero.insertAdjacentElement('beforebegin', warning);
-    document.querySelector('#openMissingHistory')?.addEventListener('click', () => document.querySelector('[data-view="history"]')?.click());
   }
 
-  function enhanceMidMonthLabels() {
-    if (!latestState) return;
-    const current = currentMonth();
-    const todayCfg = latestState.months?.[current];
-    if (todayCfg && Number(todayCfg.trackingStartDay || 1) > 1 && document.querySelector('#pageEyebrow')?.textContent.trim() === 'TODAY') {
-      const net = knownNetSpending(current, todayCfg);
-      const summaryLabels = [...document.querySelectorAll('#view .summary-grid .metric-label')];
-      const remaining = summaryLabels.find((el) => el.textContent.trim() === 'Money remaining');
-      const foot = remaining?.closest('.metric-card')?.querySelector('.metric-foot');
-      const startDate = dateFor(current, Number(todayCfg.trackingStartDay));
-      if (foot) {
-        const next = net < 0 ? `${money(net)} net gain since ${startDate}` : `${money(net)} net spending since ${startDate}`;
-        if (foot.textContent !== next) foot.textContent = next;
-      }
-      const progress = document.querySelector('#view .section-card .progress-meta span:first-child');
-      if (progress) {
-        const next = net < 0 ? `${money(net)} net gain since tracking began` : `${money(net)} net spending since tracking began`;
-        if (progress.textContent !== next) progress.textContent = next;
-      }
-    }
-
-    const historyMonth = document.querySelector('#historyMonthPicker')?.value;
-    const historyCfg = historyMonth ? latestState.months?.[historyMonth] : null;
-    if (historyCfg && Number(historyCfg.trackingStartDay || 1) > 1) {
-      const net = knownNetSpending(historyMonth, historyCfg);
-      const historyHead = document.querySelector('#view .form-card .section-head p');
-      if (historyHead) {
-        const startDate = dateFor(historyMonth, Number(historyCfg.trackingStartDay));
-        const nextHead = `Tracking began ${startDate} · ${net < 0 ? `${money(net)} recorded net gain` : `${money(net)} recorded net spending`} since start`;
-        if (historyHead.textContent !== nextHead) historyHead.textContent = nextHead;
-      }
-      const labels = [...document.querySelectorAll('#view .summary-grid .metric-label')];
-      const spending = labels.find((el) => ['Spent', 'Net spending'].includes(el.textContent.trim()));
-      const card = spending?.closest('.metric-card');
-      const value = card?.querySelector('.metric-value');
-      const foot = card?.querySelector('.metric-foot');
-      if (spending) {
-        const nextLabel = net < 0 ? 'Net gain' : 'Net spending';
-        if (spending.textContent !== nextLabel) spending.textContent = nextLabel;
-      }
-      if (value) {
-        const next = money(net);
-        if (value.textContent !== next) value.textContent = next;
-      }
-      if (foot) {
-        const next = historyCfg.trackingStartMode === 'actual'
-          ? 'Known net spending, including your pre-start total'
-          : `Recorded since tracking began on day ${historyCfg.trackingStartDay}`;
-        if (foot.textContent !== next) foot.textContent = next;
-      }
-    }
+  function enhanceHistory() {
+    if (monthPageOpen || document.querySelector('#pageEyebrow')?.textContent.trim() !== 'HISTORY' || !latestState) return;
+    const month = document.querySelector('#historyMonthPicker')?.value;
+    const cfg = month ? latestState.months?.[month] : null;
+    if (!month || !cfg || Number(cfg.trackingStartDay || 1) <= 1) return;
+    const net = knownNetSpending(month, cfg);
+    const labels = [...document.querySelectorAll('#view .summary-grid .metric-label')];
+    const spending = labels.find((el) => ['Spent', 'Net spending', 'Net gain'].includes(el.textContent.trim()));
+    const card = spending?.closest('.metric-card');
+    if (spending) spending.textContent = net < 0 ? 'Net gain' : 'Net spending';
+    const value = card?.querySelector('.metric-value');
+    if (value) value.textContent = money(Math.abs(net));
+    const foot = card?.querySelector('.metric-foot');
+    if (foot) foot.textContent = cfg.trackingStartMode === 'actual' ? 'Known net spending including your pre-start total' : `Recorded since tracking began on day ${cfg.trackingStartDay}`;
   }
 
-  function enhance() {
-    enhanceMonth();
-    enhanceMonthPreview();
-    enhanceCalendarGuards();
-    enhanceMidMonthLabels();
-    enhanceMissingEntryWarning();
+  function enhanceNonMonthViews() {
+    if (monthPageOpen && document.querySelector('#stableMonthForm')) return;
+    enhanceToday();
+    enhanceHistory();
   }
-
-  const observer = new MutationObserver(() => queueMicrotask(enhance));
-  observer.observe(document.documentElement, { childList: true, subtree: true });
 
   document.addEventListener('click', (event) => {
-    const dayButton = event.target.closest('.calendar-day[data-date]');
-    if (!dayButton) return;
-    const date = dayButton.dataset.date;
-    const cfg = latestState?.months?.[date.slice(0, 7)];
-    const beforeStart = cfg && Number(date.slice(-2)) < Number(cfg.trackingStartDay || 1);
-    const future = date > currentDate();
-    if (beforeStart || future) {
+    const monthTarget = event.target.closest('[data-view="month"], #startMonthButton');
+    if (monthTarget) {
+      const historyPicker = document.querySelector('#historyMonthPicker');
+      const hint = historyPicker?.value || monthPageSelected || currentMonth();
       event.preventDefault();
       event.stopImmediatePropagation();
+      monthPageOpen = false;
+      setTimeout(() => openMonth(hint), 0);
+      return;
+    }
+
+    const calendarDay = event.target.closest('.calendar-day[data-date]');
+    if (calendarDay && latestState) {
+      const date = calendarDay.dataset.date;
+      const cfg = latestState.months?.[date.slice(0, 7)];
+      const beforeStart = cfg && Number(date.slice(-2)) < Number(cfg.trackingStartDay || 1);
+      const future = date > currentDate();
+      if (beforeStart || future) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        toast(beforeStart ? 'That date is before tracking began for this month.' : 'Future days cannot be logged yet.', true);
+        return;
+      }
+    }
+
+    const nav = event.target.closest('[data-view]');
+    if (nav && nav.dataset.view !== 'month') {
+      const leavingMonth = monthPageOpen;
+      const chosenMonth = monthPageSelected;
+      monthPageOpen = false;
+      setTimeout(() => {
+        if (nav.dataset.view === 'history' && leavingMonth && chosenMonth) {
+          const picker = document.querySelector('#historyMonthPicker');
+          if (picker && picker.value !== chosenMonth) {
+            picker.value = chosenMonth;
+            picker.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+        }
+        enhanceNonMonthViews();
+      }, 0);
     }
   }, true);
+
+  document.addEventListener('change', (event) => {
+    if (event.target.matches('#historyMonthPicker')) setTimeout(enhanceHistory, 0);
+  }, true);
+
+  setTimeout(enhanceNonMonthViews, 50);
 })();
