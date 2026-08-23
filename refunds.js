@@ -119,8 +119,10 @@
       const a = amounts(entry);
       const spentEl = button.querySelector('.day-spent');
       const caption = button.querySelector('.day-caption');
-      if (spentEl) spentEl.textContent = a.net < 0 ? `+${money(Math.abs(a.net))}` : money(a.net);
-      if (caption && a.refunded > 0) caption.textContent = a.net < 0 ? 'net gain' : `${money(a.refunded)} back`;
+      const spentText = a.net < 0 ? `+${money(Math.abs(a.net))}` : money(a.net);
+      const captionText = a.net < 0 ? 'net gain' : `${money(a.refunded)} back`;
+      if (spentEl && spentEl.textContent !== spentText) spentEl.textContent = spentText;
+      if (caption && a.refunded > 0 && caption.textContent !== captionText) caption.textContent = captionText;
     });
 
     const section = document.querySelector('#view .form-card .section-head');
@@ -132,10 +134,11 @@
         const a = amounts(entry); gross += a.spent; refunded += a.refunded;
       });
       const p = section.querySelector('p');
-      if (p && (gross || refunded)) p.textContent = `${money(gross)} gross spent · ${money(refunded)} back · ${gross - refunded < 0 ? `+${money(refunded - gross)} net gain` : `${money(gross - refunded)} net spent`}`;
+      const historyText = `${money(gross)} gross spent · ${money(refunded)} back · ${gross - refunded < 0 ? `+${money(refunded - gross)} net gain` : `${money(gross - refunded)} net spent`}`;
+      if (p && (gross || refunded) && p.textContent !== historyText) p.textContent = historyText;
       const labels = [...document.querySelectorAll('#view .summary-grid .metric-label')];
       const spentCard = labels.find((el) => el.textContent.trim() === 'Spent');
-      if (spentCard) spentCard.textContent = 'Net spending';
+      if (spentCard && spentCard.textContent !== 'Net spending') spentCard.textContent = 'Net spending';
     }
   }
 
