@@ -9,21 +9,12 @@ const DATE_RE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
 
 function freshState() {
   const now = new Date().toISOString();
-  return {
-    version: 1,
-    createdAt: now,
-    updatedAt: now,
-    recurringExpenses: [],
-    months: {},
-    dailySpending: {},
-  };
+  return { version: 2, createdAt: now, updatedAt: now, recurringExpenses: [], months: {}, dailySpending: {} };
 }
 
 function finiteMoney(value, label) {
-  const number = Number(value);
-  if (!Number.isFinite(number) || number < 0 || number > 1_000_000_000) {
-    throw new Error(`${label} must be a valid non-negative number.`);
-  }
+  const number = Number(value ?? 0);
+  if (!Number.isFinite(number) || number < 0 || number > 1_000_000_000) throw new Error(`${label} must be a valid non-negative number.`);
   return Math.round((number + Number.EPSILON) * 100) / 100;
 }
 
@@ -40,20 +31,26 @@ function cleanExpense(item) {
   };
 }
 
+function cleanDailyEntry(entry, preserveTimestamp = false) {
+  return {
+    amount: finiteMoney(entry?.amount, 'Daily spending'),
+    refund: finiteMoney(entry?.refund, 'Money back / refunds'),
+    note: cleanText(entry?.note, 200),
+    refundNote: cleanText(entry?.refundNote, 200),
+    updatedAt: preserveTimestamp ? (cleanText(entry?.updatedAt, 40) || new Date().toISOString()) : new Date().toISOString(),
+  };
+}
+
 function validateDateKey(date) {
   if (!DATE_RE.test(date)) throw new Error('Invalid date.');
   const [year, month, day] = date.split('-').map(Number);
   const parsed = new Date(Date.UTC(year, month - 1, day));
-  if (
-    parsed.getUTCFullYear() !== year ||
-    parsed.getUTCMonth() !== month - 1 ||
-    parsed.getUTCDate() !== day
-  ) throw new Error('Invalid date.');
+  if (parsed.getUTCFullYear() !== year || parsed.getUTCMonth() !== month - 1 || parsed.getUTCDate() !== day) throw new Error('Invalid date.');
 }
 
 function applyMutation(state, action, payload = {}) {
   const next = structuredClone(state || freshState());
-  next.version = 1;
+  next.version = 2;
   next.months ||= {};
   next.dailySpending ||= {};
   next.recurringExpenses ||= [];
@@ -71,11 +68,7 @@ function applyMutation(state, action, payload = {}) {
   } else if (action === 'saveDaily') {
     const date = cleanText(payload.date, 10);
     validateDateKey(date);
-    next.dailySpending[date] = {
-      amount: finiteMoney(payload.amount, 'Daily spending'),
-      note: cleanText(payload.note, 200),
-      updatedAt: new Date().toISOString(),
-    };
+    next.dailySpending[date] = cleanDailyEntry(payload);
   } else if (action === 'deleteDaily') {
     const date = cleanText(payload.date, 10);
     validateDateKey(date);
@@ -92,9 +85,7 @@ function applyMutation(state, action, payload = {}) {
     if (!imported || typeof imported !== 'object') throw new Error('Invalid backup file.');
     const validated = freshState();
     validated.createdAt = cleanText(imported.createdAt, 40) || validated.createdAt;
-    validated.recurringExpenses = Array.isArray(imported.recurringExpenses)
-      ? imported.recurringExpenses.map(cleanExpense)
-      : [];
+    validated.recurringExpenses = Array.isArray(imported.recurringExpenses) ? imported.recurringExpenses.map(cleanExpense) : [];
     for (const [month, cfg] of Object.entries(imported.months || {})) {
       if (!MONTH_RE.test(month)) continue;
       validated.months[month] = {
@@ -106,16 +97,8 @@ function applyMutation(state, action, payload = {}) {
       };
     }
     for (const [date, entry] of Object.entries(imported.dailySpending || {})) {
-      try {
-        validateDateKey(date);
-      } catch {
-        continue;
-      }
-      validated.dailySpending[date] = {
-        amount: finiteMoney(entry?.amount, 'Daily spending'),
-        note: cleanText(entry?.note, 200),
-        updatedAt: cleanText(entry?.updatedAt, 40) || new Date().toISOString(),
-      };
+      try { validateDateKey(date); } catch { continue; }
+      validated.dailySpending[date] = cleanDailyEntry(entry, true);
     }
     validated.updatedAt = new Date().toISOString();
     return validated;
@@ -128,10 +111,7 @@ function applyMutation(state, action, payload = {}) {
 }
 
 async function readState(store) {
-  const entry = await store.getWithMetadata(STATE_KEY, {
-    consistency: 'strong',
-    type: 'json',
-  });
+  const entry = await store.getWithMetadata(STATE_KEY, { consistency: 'strong', type: 'json' });
   if (!entry) return { state: freshState(), etag: null, exists: false };
   return { state: entry.data, etag: entry.etag, exists: true };
 }
@@ -148,36 +128,23 @@ async function mutate(store, action, payload) {
 }
 
 export default async (request) => {
-  if (!isAuthenticated(request)) {
-    return json({ error: 'Unauthorized.' }, 401);
-  }
-
+  if (!isAuthenticated(request)) return json({ error: 'Unauthorized.' }, 401);
   const store = getStore({ name: STORE_NAME, consistency: 'strong' });
   const { pathname } = new URL(request.url);
-
   try {
     if (request.method === 'GET' && pathname.endsWith('/state')) {
       const { state, etag } = await readState(store);
       return json({ state, etag });
     }
-
     if (request.method === 'POST' && pathname.endsWith('/mutate')) {
       let body;
-      try {
-        body = await request.json();
-      } catch {
-        return json({ error: 'Invalid JSON.' }, 400);
-      }
-      const result = await mutate(store, body?.action, body?.payload || {});
-      return json(result);
+      try { body = await request.json(); } catch { return json({ error: 'Invalid JSON.' }, 400); }
+      return json(await mutate(store, body?.action, body?.payload || {}));
     }
   } catch (error) {
     return json({ error: error?.message || 'Request failed.' }, 400);
   }
-
   return json({ error: 'Not found.' }, 404);
 };
 
-export const config = {
-  path: '/api/budget/*',
-};
+export const config = { path: '/api/budget/*' };
