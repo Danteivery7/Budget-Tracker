@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { getStore } from '@netlify/blobs';
 import { isAuthenticated, json } from '../lib/auth.mjs';
+import { copyCardsForImport, ensureCardsShape } from '../lib/cards-core.mjs';
 
 const STORE_NAME = 'budget-tracker';
 const STATE_KEY = 'state';
@@ -9,7 +10,7 @@ const DATE_RE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
 
 function freshState() {
   const now = new Date().toISOString();
-  return { version: 3, createdAt: now, updatedAt: now, recurringExpenses: [], months: {}, dailySpending: {} };
+  return ensureCardsShape({ version: 3, createdAt: now, updatedAt: now, recurringExpenses: [], months: {}, dailySpending: {} });
 }
 
 function finiteMoney(value, label) {
@@ -71,8 +72,22 @@ function validateDateKey(date) {
   if (parsed.getUTCFullYear() !== year || parsed.getUTCMonth() !== month - 1 || parsed.getUTCDate() !== day) throw new Error('Invalid date.');
 }
 
+function linkedCardTotals(state, date) {
+  let purchases = 0;
+  let refunds = 0;
+  for (const transaction of state.cardTransactions || []) {
+    if (transaction?.date !== date) continue;
+    if (transaction.kind === 'refund') refunds += Number(transaction.amount || 0);
+    else purchases += Number(transaction.amount || 0);
+  }
+  return {
+    purchases: Math.round((purchases + Number.EPSILON) * 100) / 100,
+    refunds: Math.round((refunds + Number.EPSILON) * 100) / 100,
+  };
+}
+
 function applyMutation(state, action, payload = {}) {
-  const next = structuredClone(state || freshState());
+  const next = ensureCardsShape(structuredClone(state || freshState()));
   next.version = 3;
   next.months ||= {};
   next.dailySpending ||= {};
@@ -105,18 +120,32 @@ function applyMutation(state, action, payload = {}) {
     const startDay = Number(cfg.trackingStartDay || 1);
     const day = Number(date.slice(-2));
     if (day < startDay) throw new Error('That date is before this month’s tracking start date.');
-    next.dailySpending[date] = cleanDailyEntry(payload);
+    const cleaned = cleanDailyEntry(payload);
+    const linked = linkedCardTotals(next, date);
+    if (cleaned.amount + 0.005 < linked.purchases) throw new Error(`This day already has ${linked.purchases.toFixed(2)} in card-linked purchases. The daily total cannot be lower than that.`);
+    if (cleaned.refund + 0.005 < linked.refunds) throw new Error(`This day already has ${linked.refunds.toFixed(2)} in card-linked refunds. The refund total cannot be lower than that.`);
+    next.dailySpending[date] = cleaned;
   } else if (action === 'deleteDaily') {
     const date = cleanText(payload.date, 10);
     validateDateKey(date);
+    const linked = linkedCardTotals(next, date);
+    if (linked.purchases > 0 || linked.refunds > 0) throw new Error('This day has card-linked activity. Delete those card transactions from Cards first.');
     delete next.dailySpending[date];
   } else if (action === 'saveRecurring') {
     if (!Array.isArray(payload.expenses)) throw new Error('Expenses must be a list.');
-    next.recurringExpenses = payload.expenses.map(cleanExpense);
+    const cleaned = payload.expenses.map(cleanExpense);
+    const activeIds = new Set(cleaned.map((expense) => expense.id));
+    const timestamp = new Date().toISOString();
+    for (const [expenseId, meta] of Object.entries(next.recurringPaymentMeta || {})) {
+      if (meta?.active !== false && !activeIds.has(expenseId)) next.recurringPaymentMeta[expenseId] = { ...meta, active: false, endedAt: timestamp, updatedAt: timestamp };
+    }
+    next.recurringExpenses = cleaned;
   } else if (action === 'deleteMonth') {
     const month = cleanText(payload.month, 7);
     if (!MONTH_RE.test(month)) throw new Error('Invalid month.');
     delete next.months[month];
+    delete next.recurringPaymentSnapshots?.[month];
+    delete next.housingPaymentSnapshots?.[month];
   } else if (action === 'importState') {
     const imported = payload.state;
     if (!imported || typeof imported !== 'object') throw new Error('Invalid backup file.');
@@ -142,6 +171,7 @@ function applyMutation(state, action, payload = {}) {
       if (cfg && Number(date.slice(-2)) < Number(cfg.trackingStartDay || 1)) continue;
       validated.dailySpending[date] = cleanDailyEntry(entry, true);
     }
+    copyCardsForImport(imported, validated);
     validated.updatedAt = new Date().toISOString();
     return validated;
   } else {
@@ -155,7 +185,7 @@ function applyMutation(state, action, payload = {}) {
 async function readState(store) {
   const entry = await store.getWithMetadata(STATE_KEY, { consistency: 'strong', type: 'json' });
   if (!entry) return { state: freshState(), etag: null, exists: false };
-  return { state: entry.data, etag: entry.etag, exists: true };
+  return { state: ensureCardsShape(entry.data), etag: entry.etag, exists: true };
 }
 
 async function mutate(store, action, payload) {
