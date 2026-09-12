@@ -96,7 +96,7 @@ function renderBridgeOverview(state, bounds) {
   if (eyebrow) eyebrow.textContent = 'ACTIVE FINANCIAL CYCLE';
   if (title) title.textContent = 'Your financial position';
   view.innerHTML = `
-    <article class="card section-card" style="margin-top:0"><div class="section-head"><div><h2>${esc(pretty(bounds.start))} → ${esc(pretty(bounds.end))}</h2><p>This is one financial month. The calendar changing to ${esc(today.slice(0, 7))} does not reset income, targets, spending, or carry.</p></div><span class="status-badge neutral">Day ${day.day} of ${day.daysInCycle}</span></div><div class="callout"><span class="callout-dot"></span><div><strong>Weekly cadence</strong><span>${esc(weeklyCopy(state, today))}</span></div></div></article>
+    <article id="fiscalBridgeOverview" class="card section-card" style="margin-top:0"><div class="section-head"><div><h2>${esc(pretty(bounds.start))} → ${esc(pretty(bounds.end))}</h2><p>This is one financial month. The calendar changing to ${esc(today.slice(0, 7))} does not reset income, targets, spending, or carry.</p></div><span class="status-badge neutral">Day ${day.day} of ${day.daysInCycle}</span></div><div class="callout"><span class="callout-dot"></span><div><strong>Weekly cadence</strong><span>${esc(weeklyCopy(state, today))}</span></div></div></article>
     <div class="hero-grid">
       <article class="card hero-card"><div><div class="hero-label">You can spend today</div><div class="hero-amount">${money(day.availableToday)}</div><div class="hero-sub">Base pace: <strong>${money(day.baseDaily)}/day</strong> · Financial cycle ends ${esc(pretty(bounds.end))}</div></div><div><div class="callout"><span class="callout-dot"></span><div><strong>Cycle does not reset on the 1st</strong><span>Your approved income and targets remain active until ${esc(pretty(bounds.end))}. The next cycle begins ${esc(pretty(bounds.nextStart))}.</span></div></div></div></article>
       <article class="card entry-card"><h2>${entry.amount != null ? 'Update today' : 'Log today'}</h2><p>Daily spending stays attached to this financial cycle even though it crosses a calendar-month boundary.</p><form id="fiscalTodayForm"><div class="money-input"><span>$</span><input id="fiscalTodayAmount" type="number" min="0" step="0.01" inputmode="decimal" value="${Number(entry.amount || 0) || ''}" placeholder="0.00" required /></div><input id="fiscalTodayNote" class="entry-note" maxlength="200" value="${esc(entry.note || '')}" placeholder="Optional note"/><button class="button primary wide" type="submit">Save today</button></form></article>
@@ -137,11 +137,11 @@ function enhanceFiscalUi() {
     timing[0].querySelector('strong')?.replaceChildren(document.createTextNode('Apply to current financial cycle'));
     timing[0].querySelector('span')?.replaceChildren(document.createTextNode(`Preserve everything already recorded in ${pretty(bounds.start)}–${pretty(bounds.end)} and recalculate the rest of this cycle.`));
     timing[1].querySelector('strong')?.replaceChildren(document.createTextNode(`Start ${pretty(bounds.nextStart)}`));
-    timing[1].querySelector('span')?.replaceChildren(document.createTextNode(`Leave the current cycle untouched. The new plan starts on your next fiscal boundary, not on the 1st.`));
+    timing[1].querySelector('span')?.replaceChildren(document.createTextNode('Leave the current cycle untouched. The new plan starts on your next fiscal boundary, not on the 1st.'));
   }
 
   const overviewActive = document.querySelector('[data-view="today"].active');
-  if (overviewActive && today.slice(0, 7) !== bounds.cycleMonth) renderBridgeOverview(state, bounds);
+  if (overviewActive && today.slice(0, 7) !== bounds.cycleMonth && !document.querySelector('#fiscalBridgeOverview')) renderBridgeOverview(state, bounds);
 }
 
 const observer = new MutationObserver(() => queueMicrotask(enhanceFiscalUi));
