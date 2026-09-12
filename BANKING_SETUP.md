@@ -1,6 +1,8 @@
-# Secure Plaid banking setup
+# Secure Plaid banking setup on Cloudflare
 
-Budget Tracker's linked-account layer is deliberately read-only and separate from normal budget state.
+Budget Tracker's linked-account layer is read-only and separate from normal budget state. The application is hosted with Cloudflare Pages Functions + D1; Netlify is not required.
+
+For the complete hosting checklist, start with `CLOUDFLARE_SETUP.md`.
 
 ## What the integration requests
 
@@ -15,84 +17,62 @@ Bank credentials are entered only in Plaid Link / the institution OAuth flow. Bu
 
 ## Private storage model
 
-- Plaid access tokens live only in the server-side `budget-tracker-bank-vault` Netlify Blob store.
-- The entire vault is AES-256-GCM encrypted before storage.
-- Normalized bank transactions live only in the separate `budget-tracker-bank-data` Blob store and are also AES-256-GCM encrypted before storage.
+- Plaid access tokens are stored only in the server-side encrypted bank vault in Cloudflare D1.
+- The entire vault is AES-256-GCM encrypted before D1 receives it.
+- Normalized bank transactions live in a separate encrypted namespace in D1 and are also AES-256-GCM encrypted before storage.
 - The browser never receives access tokens, Plaid Item IDs, Plaid account IDs, or Plaid transaction IDs.
 - Browser-facing account/transaction references are opaque HMAC-derived IDs.
-- The normal budget state receives only recurring-charge candidates and a small feed summary.
-- Recent bank activity is fetched only after a separate 15-minute banking re-auth and is kept in page memory only.
+- The normal budget state receives only recurring-charge candidates and small derived summaries.
+- Recent bank activity requires the separate 15-minute banking re-authentication and is kept in page memory only.
 
-## 1. Create/configure Plaid
+## Cloudflare secrets
 
-Create a Plaid Dashboard account and begin with Sandbox. Enable/use the Transactions product for this app.
+Add these in Cloudflare Pages → Settings → Variables and Secrets as encrypted secrets:
 
-Plaid currently supports `sandbox` and `production` API environments. Budget Tracker intentionally rejects the retired `development` value.
+- `BUDGET_TRACKER_PASSWORD`
+- `PLAID_CLIENT_ID`
+- `PLAID_SECRET`
+- `PLAID_TOKEN_ENCRYPTION_KEY`
 
-For mobile-web OAuth support, add this exact HTTPS URL to Plaid Dashboard > Allowed redirect URIs:
-
-`https://YOUR-SITE/plaid-oauth.html`
-
-Use the actual Netlify custom/site domain. Do not add query parameters.
-
-## 2. Create the encryption key locally
-
-Generate a fresh 32-byte random key. Do not reuse the site password or a Plaid secret.
-
-With Node installed:
+Generate `PLAID_TOKEN_ENCRYPTION_KEY` locally as a fresh random 32-byte Base64 value:
 
 ```bash
-node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"
 ```
 
-Copy the output directly into Netlify as `PLAID_TOKEN_ENCRYPTION_KEY`. Do not commit it and do not paste it into ChatGPT.
+Do not commit or share that value. If it is changed after live accounts are connected, the previous encrypted bank vault cannot be decrypted.
 
-If this key is lost or changed after accounts are connected, existing encrypted bank-vault data cannot be decrypted. Store it in a secure password manager or secrets vault.
+## Normal variables
 
-## 3. Add Netlify environment variables
+- `PLAID_ENV` = `sandbox` initially, later `production`
+- `PLAID_TRANSACTION_HISTORY_DAYS` = `180`
+- `PLAID_REDIRECT_URI` = `https://YOUR-HOST/plaid-oauth.html`
+- `PLAID_WEBHOOK_URL` = `https://YOUR-HOST/api/plaid/webhook`
+- `PASSKEY_RP_ID` = your final production hostname
+- `PASSKEY_ORIGIN` = the exact HTTPS production origin
 
-Required:
+## D1
 
-- `PLAID_CLIENT_ID` = Plaid Dashboard client ID
-- `PLAID_SECRET` = the matching Sandbox or Production secret
-- `PLAID_ENV` = `sandbox` initially; later `production`
-- `PLAID_TOKEN_ENCRYPTION_KEY` = the 32-byte Base64 value generated above
+Bind the Cloudflare D1 database to the Pages project as `DB`. The app initializes the required tables defensively, and the canonical schema is also committed at `migrations/0001_cloudflare_storage.sql`.
 
-Recommended:
-
-- `PLAID_TRANSACTION_HISTORY_DAYS` = `180` by default. Allowed range is 30–730. The same value controls the private encrypted cache retention window.
-- `PLAID_REDIRECT_URI` = `https://YOUR-SITE/plaid-oauth.html` after that exact URL is allow-listed in Plaid.
-
-Optional:
-
-- `PLAID_WEBHOOK_URL` = `https://YOUR-SITE/api/plaid/webhook`. If omitted, Budget Tracker derives this from the request origin.
-- `PLAID_API_VERSION` = leave unset to use the pinned application default unless a deliberate migration is being performed.
-
-Redeploy after adding/changing Netlify environment variables.
-
-## 4. Sandbox verification
+## Sandbox verification
 
 1. Sign in to Budget Tracker.
 2. Open **Linked Accounts**.
-3. Re-enter the Budget Tracker access code. This creates a separately signed banking session that expires server-side after 15 minutes.
+3. Re-enter the Budget Tracker access code or use a registered passkey. This creates a separately signed 15-minute banking session.
 4. Select **Connect financial account**.
-5. Complete Plaid Link using a Sandbox institution/test credentials.
-6. Confirm that the account summary appears and **Recent activity** loads.
-7. Confirm the Subscriptions workspace receives recurring candidates after enough repeating test transactions exist.
-8. Test **Disconnect**. It calls Plaid `/item/remove`, deletes the encrypted local bank cache, and stops future sync.
+5. Complete Plaid Link using Sandbox.
+6. Confirm account summaries and **Recent activity** load.
+7. Confirm recurring-charge discovery and the Review Inbox receive expected test activity.
+8. Test **Disconnect** and confirm the connection and encrypted local bank cache are removed.
 
-Do not switch to Production until this entire flow works in Sandbox.
-
-## 5. Production
-
-After Plaid Production access is enabled, change `PLAID_ENV` to `production` and replace `PLAID_SECRET` with the Production secret. Keep the existing encryption key unless intentionally starting a completely new encrypted bank vault.
-
-Connect only accounts you want Budget Tracker to read. Institution OAuth/consent determines the actual accounts and permissions shared.
+Do not switch to Plaid Production until the complete Sandbox flow succeeds.
 
 ## Security behavior
 
 - Banking POST requests require same-origin checks in addition to SameSite cookies.
-- Bank balances and activity require the normal app login plus a separate short-lived bank session.
-- Plaid webhooks are accepted only after ES256 JWT verification, a five-minute freshness check, and timing-safe SHA-256 request-body verification.
+- Bank balances and activity require the normal app login plus a separate short-lived banking session.
+- Plaid webhooks require ES256 JWT verification, freshness validation, and timing-safe SHA-256 request-body verification.
 - Link is loaded directly from Plaid's official CDN and is restricted by Content Security Policy.
-- Raw linked-bank transactions do **not** automatically alter daily discretionary spending. They currently feed read-only account views and recurring-charge discovery. Automatic income/transfer/card-payment classification must be explicit before it is allowed to mutate budget math.
+- Raw linked-bank transactions remain separate from the normal budget state.
+- D1-based API rate limiting stores only keyed hashes of source IP addresses, never raw IP values.

@@ -1,0 +1,9 @@
+/*
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: same-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=()
+  Content-Security-Policy: default-src 'self'; script-src 'self' https://cdn.plaid.com/link/v2/stable/link-initialize.js; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://cdn.plaid.com; frame-src https://cdn.plaid.com/; connect-src 'self' https://sandbox.plaid.com https://production.plaid.com; font-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'
+
+/sw.js
+  Cache-Control: no-cache, no-store, must-revalidate
