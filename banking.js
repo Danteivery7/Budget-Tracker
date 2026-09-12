@@ -6,7 +6,7 @@ const time = (value) => value ? new Intl.DateTimeFormat('en-US',{month:'short',d
 let pageOpen = false;
 let session = null;
 let connections = [];
-let txCache = new Map();
+const txCache = new Map();
 let toastTimer = null;
 
 function toast(message, error = false) {
@@ -96,7 +96,7 @@ function renderSetupNeeded() {
   setChrome();
   const setup = session?.setup || {};
   const view = $('#view');
-  view.innerHTML = `<div class="bank-shell">${securityCards()}<article class="card bank-panel"><div class="bank-panel-head"><div><h2>Secure Plaid server configuration</h2><p>The banking code is installed, but no live financial account can be connected until the required secrets exist in Netlify. Do not paste any of these secret values into the website or chat.</p></div><button class="button ghost" id="bankLockButton" type="button">Lock banking</button></div><div class="bank-warning"><strong>Server configuration incomplete.</strong> Add the values directly in Netlify environment variables, then redeploy. The encryption key must be a fresh random 32-byte value encoded as Base64.</div><div class="bank-env"><code>PLAID_CLIENT_ID</code><code>PLAID_SECRET</code><code>PLAID_ENV = sandbox or production</code><code>PLAID_TOKEN_ENCRYPTION_KEY = 32 random bytes, Base64</code><code>PLAID_TRANSACTION_HISTORY_DAYS = 180 (optional, 30–730)</code><code>PLAID_WEBHOOK_URL (optional; otherwise derived automatically)</code></div><div class="bank-private-note" style="margin-top:16px"><div><strong>Current readiness</strong><span>Plaid credentials: ${setup.plaidConfigured ? 'ready' : 'missing'} · encrypted vault: ${setup.encryptionConfigured ? 'ready' : 'missing'}.</span></div></div></article></div>`;
+  view.innerHTML = `<div class="bank-shell">${securityCards()}<article class="card bank-panel"><div class="bank-panel-head"><div><h2>Secure Plaid server configuration</h2><p>The banking code is installed, but no live financial account can be connected until the required secrets exist in Netlify. Do not paste any of these secret values into the website or chat.</p></div><button class="button ghost" id="bankLockButton" type="button">Lock banking</button></div><div class="bank-warning"><strong>Server configuration incomplete.</strong> Add the values directly in Netlify environment variables, then redeploy. The encryption key must be a fresh random 32-byte value encoded as Base64.</div><div class="bank-env"><code>PLAID_CLIENT_ID</code><code>PLAID_SECRET</code><code>PLAID_ENV = sandbox or production</code><code>PLAID_TOKEN_ENCRYPTION_KEY = 32 random bytes, Base64</code><code>PLAID_TRANSACTION_HISTORY_DAYS = 180 (optional, 30–730)</code><code>PLAID_REDIRECT_URI = https://your-site/plaid-oauth.html (optional, recommended for mobile OAuth)</code><code>PLAID_WEBHOOK_URL (optional; otherwise derived automatically)</code></div><div class="bank-private-note" style="margin-top:16px"><div><strong>Current readiness</strong><span>Plaid credentials: ${setup.plaidConfigured ? 'ready' : 'missing'} · encrypted vault: ${setup.encryptionConfigured ? 'ready' : 'missing'}.</span></div></div></article></div>`;
   bindLock();
 }
 
@@ -123,7 +123,7 @@ function renderReady() {
   setChrome();
   const setup = session?.setup || {};
   const view = $('#view');
-  view.innerHTML = `<div class="bank-shell">${securityCards()}<article class="card bank-panel"><div class="bank-panel-head"><div><h2>Financial connections</h2><p>Plaid ${esc((setup.environment || 'sandbox').toUpperCase())} · ${Number(setup.historyDays || 180)} days requested for new transaction connections. Your budget receives classifications and summaries, not this raw bank feed.</p></div><div class="bank-connection-actions"><button class="button primary" id="connectBankButton" type="button">Connect financial account</button><button class="button ghost" id="bankLockButton" type="button">Lock banking</button></div></div><div class="bank-private-note"><div><strong>Read-only by design</strong><span>This integration requests the Transactions product only. It has no code path for ACH credentials, bank transfers, or moving money.</span></div></div></article>${connections.length ? `<div class="bank-connection-list">${connections.map(connectionMarkup).join('')}</div>` : `<article class="card bank-empty"><h3>No financial accounts connected yet.</h3><p>Connect through Plaid Link. Your bank credentials stay in the institution/Plaid authorization flow and never pass through Budget Tracker.</p><button class="button primary" id="connectBankEmpty" type="button">Connect your first account</button></article>`}</div>`;
+  view.innerHTML = `<div class="bank-shell">${securityCards()}<article class="card bank-panel"><div class="bank-panel-head"><div><h2>Financial connections</h2><p>Plaid ${esc((setup.environment || 'sandbox').toUpperCase())} · ${Number(setup.historyDays || 180)} days requested and retained for new transaction connections. Your budget receives classifications and summaries, not this private bank feed.</p></div><div class="bank-connection-actions"><button class="button primary" id="connectBankButton" type="button">Connect financial account</button><button class="button ghost" id="bankLockButton" type="button">Lock banking</button></div></div><div class="bank-private-note"><div><strong>Read-only by design</strong><span>This integration requests the Transactions product only. It has no code path for ACH credentials, bank transfers, or moving money.</span></div></div></article>${connections.length ? `<div class="bank-connection-list">${connections.map(connectionMarkup).join('')}</div>` : `<article class="card bank-empty"><h3>No financial accounts connected yet.</h3><p>Connect through Plaid Link. Your bank credentials stay in the institution/Plaid authorization flow and never pass through Budget Tracker.</p><button class="button primary" id="connectBankEmpty" type="button">Connect your first account</button></article>`}</div>`;
   bindLock();
   $('#connectBankButton')?.addEventListener('click', () => launchPlaid());
   $('#connectBankEmpty')?.addEventListener('click', () => launchPlaid());
@@ -153,6 +153,7 @@ async function launchPlaid(connectionId = null) {
     token = await api('/api/bank/link-token', { method:'POST', body:JSON.stringify({ connectionId }) });
   } catch (error) { return toast(error.message, true); }
 
+  if (token.redirectEnabled) sessionStorage.setItem('budget_plaid_oauth', JSON.stringify({ linkToken:token.linkToken, connectionId, createdAt:Date.now() }));
   const handler = window.Plaid.create({
     token: token.linkToken,
     onSuccess: async (publicToken, metadata) => {
@@ -164,6 +165,7 @@ async function launchPlaid(connectionId = null) {
           await api('/api/bank/exchange', { method:'POST', body:JSON.stringify({ publicToken, institutionName:metadata?.institution?.name || 'Financial institution' }) });
           toast('Financial account connected securely.');
         }
+        sessionStorage.removeItem('budget_plaid_oauth');
         txCache.clear();
         await loadStatus();
         renderReady();
@@ -255,6 +257,10 @@ function boot() {
   injectNavigation();
   observeNavigation();
   window.addEventListener('pageshow', injectNavigation);
+  if (sessionStorage.getItem('budget_open_bank') === '1') {
+    sessionStorage.removeItem('budget_open_bank');
+    setTimeout(openPage, 180);
+  }
 }
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot, { once:true });
 else boot();
