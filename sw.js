@@ -1,5 +1,5 @@
-const CACHE = 'budget-tracker-v7';
-const STATIC = ['/', '/index.html', '/styles.css', '/purchase-planner.css', '/professional.css', '/app.js', '/engine.js', '/refunds.js', '/start.js', '/allocations.js', '/cards.js', '/purchase-engine.js', '/purchase-planner.js', '/setup-engine.js', '/setup-wizard.js', '/ui-polish.js', '/manifest.webmanifest', '/icon.svg'];
+const CACHE = 'budget-tracker-v8';
+const STATIC = ['/', '/index.html', '/styles.css', '/purchase-planner.css', '/professional.css', '/subscriptions.css', '/app.js', '/engine.js', '/refunds.js', '/start.js', '/allocations.js', '/cards.js', '/subscription-engine.js', '/subscriptions.js', '/purchase-engine.js', '/purchase-planner.js', '/setup-engine.js', '/setup-wizard.js', '/ui-polish.js', '/manifest.webmanifest', '/icon.svg'];
 self.addEventListener('install', (event) => { event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(STATIC))); self.skipWaiting(); });
 self.addEventListener('activate', (event) => { event.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((key) => key !== CACHE).map((key) => caches.delete(key))))); self.clients.claim(); });
 self.addEventListener('fetch', (event) => {

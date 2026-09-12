@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { getStore } from '@netlify/blobs';
 import { isAuthenticated, json } from '../lib/auth.mjs';
-import { copyCardsForImport, ensureCardsShape } from '../lib/cards-core.mjs';
+import { copyCardsForImport } from '../lib/cards-core.mjs';
+import { copySubscriptionsForImport, ensureSubscriptionShape } from '../lib/subscriptions-core.mjs';
 
 const STORE_NAME = 'budget-tracker';
 const STATE_KEY = 'state';
@@ -10,7 +11,7 @@ const DATE_RE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
 
 function freshState() {
   const now = new Date().toISOString();
-  return ensureCardsShape({ version: 3, createdAt: now, updatedAt: now, recurringExpenses: [], months: {}, dailySpending: {} });
+  return ensureSubscriptionShape({ version: 3, createdAt: now, updatedAt: now, recurringExpenses: [], months: {}, dailySpending: {} });
 }
 
 function finiteMoney(value, label) {
@@ -101,7 +102,7 @@ function linkedCardTotals(state, date) {
 }
 
 function applyMutation(state, action, payload = {}) {
-  const next = ensureCardsShape(structuredClone(state || freshState()));
+  const next = ensureSubscriptionShape(structuredClone(state || freshState()));
   next.version = 3;
   next.months ||= {};
   next.dailySpending ||= {};
@@ -191,6 +192,7 @@ function applyMutation(state, action, payload = {}) {
       validated.dailySpending[date] = cleanDailyEntry(entry, true);
     }
     copyCardsForImport(imported, validated);
+    copySubscriptionsForImport(imported, validated);
     validated.updatedAt = new Date().toISOString();
     return validated;
   } else {
@@ -204,7 +206,7 @@ function applyMutation(state, action, payload = {}) {
 async function readState(store) {
   const entry = await store.getWithMetadata(STATE_KEY, { consistency: 'strong', type: 'json' });
   if (!entry) return { state: freshState(), etag: null, exists: false };
-  return { state: ensureCardsShape(entry.data), etag: entry.etag, exists: true };
+  return { state: ensureSubscriptionShape(entry.data), etag: entry.etag, exists: true };
 }
 
 async function mutate(store, action, payload) {
