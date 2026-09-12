@@ -24,11 +24,11 @@
   <div id="appShell" class="app-shell" hidden>
     <aside class="sidebar">
       <div class="brand-row"><div class="brand-mark small">BT</div><div><strong>Budget Tracker</strong><span>Personal dashboard</span></div></div>
-      <nav class="desktop-nav" aria-label="Primary navigation"><button class="nav-item active" data-view="today"><span>Today</span></button><button class="nav-item" data-view="month"><span>Month</span></button><button class="nav-item" data-view="fixed"><span>Fixed Costs</span></button><button class="nav-item" data-view="history"><span>History</span></button></nav>
+      <nav class="desktop-nav" aria-label="Primary navigation"><button class="nav-item active" data-view="today"><span>Today</span></button><button class="nav-item" data-view="month"><span>Month</span></button><button class="nav-item" data-view="planner"><span>Planner</span></button><button class="nav-item" data-view="fixed"><span>Fixed Costs</span></button><button class="nav-item" data-view="history"><span>History</span></button></nav>
       <div class="sidebar-bottom"><div class="sync-pill"><span id="syncDot" class="sync-dot"></span><span id="syncText">Synced</span></div><button id="logoutButton" class="text-button">Lock tracker</button></div>
     </aside>
     <main class="main-panel"><header class="topbar"><div><p id="pageEyebrow" class="eyebrow">TODAY</p><h1 id="pageTitle">Your budget</h1></div><div class="topbar-right"><span id="todayLabel" class="date-chip"></span></div></header><section id="view" class="view" aria-live="polite"></section></main>
-    <nav class="mobile-nav" aria-label="Mobile navigation"><button class="mobile-nav-item active" data-view="today">Today</button><button class="mobile-nav-item" data-view="month">Month</button><button class="mobile-nav-item" data-view="fixed">Costs</button><button class="mobile-nav-item" data-view="history">History</button></nav>
+    <nav class="mobile-nav" aria-label="Mobile navigation"><button class="mobile-nav-item active" data-view="today">Today</button><button class="mobile-nav-item" data-view="month">Month</button><button class="mobile-nav-item" data-view="planner">Plan</button><button class="mobile-nav-item" data-view="fixed">Costs</button><button class="mobile-nav-item" data-view="history">History</button></nav>
   </div>
   <dialog id="dayDialog" class="day-dialog">
     <form id="dayDialogForm" method="dialog" class="dialog-card">
@@ -46,5 +46,6 @@
   <script src="/start.js"></script>
   <script src="/allocations.js"></script>
   <script src="/cards.js"></script>
+  <script type="module" src="/purchase-planner.js"></script>
 </body>
 </html>
