@@ -1,5 +1,5 @@
 import { json } from '../lib/auth.mjs';
-import { markConnectionRepairByItemId, syncConnectionByItemId } from '../lib/bank-service.mjs';
+import { clearRevokedItemData, markConnectionRepairByItemId, removeRevokedAccountData, syncConnectionByItemId } from '../lib/bank-service.mjs';
 import { plaidConfigured } from '../lib/plaid-client.mjs';
 import { verifyPlaidWebhook } from '../lib/plaid-webhook.mjs';
 
@@ -20,8 +20,19 @@ export default async (request) => {
   try {
     if (body?.webhook_type === 'TRANSACTIONS' && body?.webhook_code === 'SYNC_UPDATES_AVAILABLE') {
       await syncConnectionByItemId(itemId, { webhook: true });
-    } else if (body?.webhook_type === 'ITEM' && body?.error) {
-      await markConnectionRepairByItemId(itemId, String(body.error?.error_code || 'ITEM_ERROR'));
+    } else if (body?.webhook_type === 'ITEM') {
+      const code = String(body?.webhook_code || 'ITEM_EVENT');
+      if (code === 'USER_ACCOUNT_REVOKED' && body?.account_id) {
+        await removeRevokedAccountData(itemId, String(body.account_id));
+      } else if (code === 'USER_PERMISSION_REVOKED') {
+        await clearRevokedItemData(itemId, code);
+      } else if (code === 'ERROR') {
+        const errorCode = String(body?.error?.error_code || 'ITEM_ERROR');
+        if (errorCode === 'USER_PERMISSION_REVOKED') await clearRevokedItemData(itemId, errorCode);
+        else await markConnectionRepairByItemId(itemId, errorCode);
+      } else if (code === 'PENDING_DISCONNECT' || code === 'PENDING_EXPIRATION') {
+        await markConnectionRepairByItemId(itemId, code);
+      }
     }
   } catch {
     return json({ error: 'Webhook processing failed.' }, 500);
