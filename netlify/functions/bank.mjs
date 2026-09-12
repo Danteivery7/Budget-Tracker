@@ -1,7 +1,6 @@
 import { isAuthenticated, json } from '../lib/auth.mjs';
 import { authorizeBankPassword, bankSessionCookie, clearBankSessionCookie, isBankAuthorized, requireSameOrigin, BANK_SESSION_MINUTES } from '../lib/bank-auth.mjs';
 import { bankEncryptionConfigured } from '../lib/bank-crypto.mjs';
-import { browserTransaction } from '../lib/bank-core.mjs';
 import { createPlaidLinkToken, disconnectConnection, exchangePublicToken, listPublicConnections, recentTransactions, syncConnection } from '../lib/bank-service.mjs';
 import { plaidConfigured, plaidEnvironment, plaidHistoryDays } from '../lib/plaid-client.mjs';
 
@@ -82,7 +81,7 @@ export default async (request) => {
       const connectionId = searchParams.get('connectionId') || '';
       const limit = Number(searchParams.get('limit') || 25);
       const rows = await recentTransactions(connectionId, limit);
-      return json({ transactions: rows.map(browserTransaction) });
+      return json({ transactions: rows });
     }
 
     if (request.method === 'POST' && pathname.endsWith('/disconnect')) {
