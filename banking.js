@@ -8,6 +8,7 @@ let session = null;
 let connections = [];
 const txCache = new Map();
 let toastTimer = null;
+let bankLockTimer = null;
 
 function toast(message, error = false) {
   const el = $('#toast');
@@ -16,6 +17,32 @@ function toast(message, error = false) {
   el.className = `toast show${error ? ' error' : ''}`;
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { el.className = 'toast'; }, 3200);
+}
+
+function clearBankLockTimer() {
+  clearTimeout(bankLockTimer);
+  bankLockTimer = null;
+}
+
+function lockBankingClient(showNotice = false) {
+  clearBankLockTimer();
+  session = { ...(session || {}), authorized:false, expiresAt:null };
+  connections = [];
+  txCache.clear();
+  if (pageOpen) renderLocked();
+  if (showNotice) toast('Banking locked after 15 minutes. Re-enter your access code to continue.');
+}
+
+function scheduleBankAutoLock() {
+  clearBankLockTimer();
+  const expiresAt = Number(session?.expiresAt || 0);
+  if (!session?.authorized || !Number.isFinite(expiresAt) || expiresAt <= 0) return;
+  const remaining = expiresAt - Date.now();
+  if (remaining <= 0) {
+    lockBankingClient(true);
+    return;
+  }
+  bankLockTimer = setTimeout(() => lockBankingClient(true), remaining + 25);
 }
 
 async function api(path, options = {}) {
@@ -27,6 +54,7 @@ async function api(path, options = {}) {
   let body = {};
   try { body = await response.json(); } catch { /* noop */ }
   if (!response.ok) {
+    if (response.status === 403 && String(body.error || '').includes('Banking session locked')) lockBankingClient(false);
     const error = new Error(body.error || 'Request failed.');
     error.status = response.status;
     throw error;
@@ -85,6 +113,7 @@ function renderLocked() {
     try {
       session = await api('/api/bank/authorize', { method:'POST', body:JSON.stringify({ password }) });
       $('#bankPassword').value = '';
+      scheduleBankAutoLock();
       await loadStatus();
       render();
     } catch (error) { toast(error.message, true); }
@@ -133,10 +162,7 @@ function renderReady() {
 function bindLock() {
   $('#bankLockButton')?.addEventListener('click', async () => {
     try { await api('/api/bank/lock', { method:'POST', body:'{}' }); } catch { /* still clear UI */ }
-    session = { ...(session || {}), authorized:false };
-    connections = [];
-    txCache.clear();
-    renderLocked();
+    lockBankingClient(false);
   });
 }
 
@@ -144,6 +170,7 @@ async function loadStatus() {
   const body = await api('/api/bank/status', { cache:'no-store' });
   session = { ...(session || {}), authorized:true, setup:body.setup };
   connections = body.connections || [];
+  scheduleBankAutoLock();
 }
 
 async function launchPlaid(connectionId = null) {
@@ -234,9 +261,11 @@ async function openPage() {
   if (view) view.innerHTML = '<article class="card bank-panel"><div class="bank-private-note"><div><strong>Opening secure banking…</strong><span>Checking the short-lived banking session.</span></div></div></article>';
   try {
     session = await api('/api/bank/session', { cache:'no-store' });
+    scheduleBankAutoLock();
     if (session.authorized && session.setup?.configured) await loadStatus();
   } catch (error) {
-    session = { authorized:false, setup:null };
+    session = { authorized:false, expiresAt:null, setup:null };
+    clearBankLockTimer();
     toast(error.message, true);
   }
   render();
@@ -257,6 +286,11 @@ function boot() {
   injectNavigation();
   observeNavigation();
   window.addEventListener('pageshow', injectNavigation);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible' || !session?.authorized) return;
+    if (Number(session.expiresAt || 0) <= Date.now()) lockBankingClient(pageOpen);
+    else scheduleBankAutoLock();
+  });
   if (sessionStorage.getItem('budget_open_bank') === '1') {
     sessionStorage.removeItem('budget_open_bank');
     setTimeout(openPage, 180);
