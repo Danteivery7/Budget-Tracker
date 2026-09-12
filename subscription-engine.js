@@ -14,6 +14,16 @@ export function normalizeMerchant(value = '') {
     .trim();
 }
 
+export function monthlyReserveForCadence(frequency, occurrenceAmount) {
+  const amount = Number(occurrenceAmount || 0);
+  if (!(amount > 0)) return 0;
+  if (frequency === 'weekly') return roundMoney(amount * 52 / 12);
+  if (frequency === 'biweekly') return roundMoney(amount * 26 / 12);
+  if (frequency === 'quarterly') return roundMoney(amount / 3);
+  if (frequency === 'annual') return roundMoney(amount / 12);
+  return roundMoney(amount);
+}
+
 function hashKey(value) {
   let hash = 2166136261;
   for (const char of String(value)) {
@@ -114,6 +124,7 @@ export function detectRecurringCharges(transactions = [], previousCandidates = [
       suggestedType: prior?.suggestedType || candidateType(rows),
       frequency: cadence.frequency,
       averageAmount,
+      monthlyReserveAmount: monthlyReserveForCadence(cadence.frequency, averageAmount),
       lastAmount: last.amount,
       firstDate: first.date,
       lastDate: last.date,
