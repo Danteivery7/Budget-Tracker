@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { applyCardsMutation, ensureCardsShape } from './cards-core.mjs';
-import { buildSubscriptionRoutingSummary, detectRecurringCharges } from '../../subscription-engine.js';
+import { buildSubscriptionRoutingSummary, detectRecurringCharges, matchConfirmedRecurring } from '../../subscription-engine.js';
 
 const DATE_RE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
 const text = (value, max = 160) => String(value ?? '').trim().slice(0, max);
@@ -32,15 +32,15 @@ export function ensureSubscriptionShape(sourceState) {
   const state = ensureCardsShape(sourceState || {});
   state.subscriptionFeedTransactions = Array.isArray(state.subscriptionFeedTransactions) ? state.subscriptionFeedTransactions : [];
   state.subscriptionCandidates = Array.isArray(state.subscriptionCandidates) ? state.subscriptionCandidates : [];
-  state.subscriptionSettings = state.subscriptionSettings && typeof state.subscriptionSettings === 'object' && !Array.isArray(state.subscriptionSettings)
+  const settings = state.subscriptionSettings && typeof state.subscriptionSettings === 'object' && !Array.isArray(state.subscriptionSettings)
     ? state.subscriptionSettings
     : {};
   state.subscriptionSettings = {
-    discoveryEnabled: state.subscriptionSettings.discoveryEnabled !== false,
-    defaultPaymentMethodId: text(state.subscriptionSettings.defaultPaymentMethodId, 80),
-    autopayFundingAccountId: text(state.subscriptionSettings.autopayFundingAccountId, 100),
-    autopayFundingAccountLabel: text(state.subscriptionSettings.autopayFundingAccountLabel, 80) || 'Checking',
-    ...state.subscriptionSettings,
+    ...settings,
+    discoveryEnabled: settings.discoveryEnabled !== false,
+    defaultPaymentMethodId: text(settings.defaultPaymentMethodId, 80),
+    autopayFundingAccountId: text(settings.autopayFundingAccountId, 100),
+    autopayFundingAccountLabel: text(settings.autopayFundingAccountLabel, 80) || 'Checking',
   };
   state.subscriptionReviewLog = Array.isArray(state.subscriptionReviewLog) ? state.subscriptionReviewLog : [];
   return state;
@@ -107,10 +107,11 @@ function confirmCandidate(state, payload, now) {
   const chargeDay = dayOfMonth(payload?.chargeDay, candidate.chargeDay || 1);
   const category = payload?.recurringType === 'bill' ? 'Bill' : text(payload?.category, 50) || 'Subscription';
   const countCurrentMonth = payload?.countCurrentMonth !== false;
+  const monthlyAmount = payload?.amount != null ? money(payload.amount, 'Monthly recurring reserve') : candidate.monthlyReserveAmount || candidate.averageAmount;
   const next = applyCardsMutation(state, 'saveRecurringPayment', {
     id: recurringExpenseId,
     name: text(payload?.name, 80) || candidate.merchantName,
-    amount: payload?.amount != null ? money(payload.amount, 'Recurring amount') : candidate.averageAmount,
+    amount: monthlyAmount,
     category,
     chargeDay,
     paymentMethodId,
@@ -124,9 +125,17 @@ function confirmCandidate(state, payload, now) {
     suggestedType: payload?.recurringType === 'bill' ? 'bill' : 'subscription',
     paymentMethodId,
     chargeDay,
+    monthlyReserveAmount: monthlyAmount,
     reviewedAt: nowIso,
     updatedAt: nowIso,
   });
+  next.recurringPaymentMeta[recurringExpenseId] = {
+    ...next.recurringPaymentMeta[recurringExpenseId],
+    sourceCandidateId: candidate.id,
+    detectedFrequency: candidate.frequency,
+    occurrenceAmount: candidate.averageAmount,
+    monthlyReserveAmount: monthlyAmount,
+  };
   reviewLog(next, 'confirmed', saved, nowIso);
   return next;
 }
@@ -137,6 +146,7 @@ function assignRecurring(state, expenseId, paymentMethodId, now, applyCurrentMon
   paymentMethodById(state, paymentMethodId);
   const chargeDay = Number(meta.chargeDay || 1);
   const countCurrentMonth = applyCurrentMonth === true || (applyCurrentMonth !== false && chargeDay >= currentDay(now));
+  const preservedMeta = { ...meta };
   const next = applyCardsMutation(state, 'saveRecurringPayment', {
     id: expense.id,
     name: expense.name,
@@ -147,12 +157,18 @@ function assignRecurring(state, expenseId, paymentMethodId, now, applyCurrentMon
     countCurrentMonth,
   }, now);
   ensureSubscriptionShape(next);
+  next.recurringPaymentMeta[expense.id] = { ...next.recurringPaymentMeta[expense.id], ...preservedMeta, paymentMethodId, updatedAt: now.toISOString(), active: true, endedAt: null };
   const candidate = next.subscriptionCandidates.find((item) => item.recurringExpenseId === expense.id);
   if (candidate) {
     candidate.paymentMethodId = paymentMethodId;
     candidate.updatedAt = now.toISOString();
   }
   return next;
+}
+
+export function classifySubscriptionTransaction(state, transaction) {
+  const normalized = ensureSubscriptionShape(structuredClone(state || {}));
+  return matchConfirmedRecurring(transaction, normalized.subscriptionCandidates) || { classification: 'unclassified' };
 }
 
 export function applySubscriptionMutation(sourceState, action, payload = {}, now = new Date()) {
