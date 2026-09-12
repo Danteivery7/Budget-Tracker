@@ -94,7 +94,7 @@ test('Plaid environment accepts only sandbox or production and history is bounde
   assert.equal(plaidRedirectUri(), 'https://example.com/plaid-oauth.html');
 });
 
-test('Plaid webhook JWT verifies signature, freshness, and exact body hash', () => {
+test('Plaid webhook JWT verifies signature, freshness, and exact body hash', async () => {
   const body = JSON.stringify({ webhook_type: 'TRANSACTIONS', webhook_code: 'SYNC_UPDATES_AVAILABLE', item_id: 'item-secret' });
   const now = Date.UTC(2026, 8, 12, 15, 30, 0);
   const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' });
@@ -105,9 +105,9 @@ test('Plaid webhook JWT verifies signature, freshness, and exact body hash', () 
   const signingInput = `${header}.${payload}`;
   const signature = sign('sha256', Buffer.from(signingInput), { key: privateKey, dsaEncoding: 'ieee-p1363' }).toString('base64url');
   const token = `${signingInput}.${signature}`;
-  assert.equal(verifyPlaidWebhookWithJwk(token, body, jwk, now), true);
-  assert.equal(verifyPlaidWebhookWithJwk(token, `${body} `, jwk, now), false);
-  assert.equal(verifyPlaidWebhookWithJwk(token, body, jwk, now + 6 * 60 * 1000), false);
+  assert.equal(await verifyPlaidWebhookWithJwk(token, body, jwk, now), true);
+  assert.equal(await verifyPlaidWebhookWithJwk(token, `${body} `, jwk, now), false);
+  assert.equal(await verifyPlaidWebhookWithJwk(token, body, jwk, now + 6 * 60 * 1000), false);
 });
 
 test('discovery rows use only opaque account and transaction references', () => {
