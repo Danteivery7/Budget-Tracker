@@ -25,6 +25,12 @@ function signedMoney(value, label) {
   return Math.round((number + Number.EPSILON) * 100) / 100;
 }
 
+function boundedInteger(value, fallback, min, max, label) {
+  const number = Number(value ?? fallback);
+  if (!Number.isInteger(number) || number < min || number > max) throw new Error(`${label} must be a whole number from ${min} to ${max}.`);
+  return number;
+}
+
 function cleanText(value, max = 120) {
   return String(value || '').trim().slice(0, max);
 }
@@ -65,6 +71,14 @@ function cleanTracking(cfg, month) {
   return { trackingStartDay, trackingStartMode, priorNetSpending };
 }
 
+function cleanAllocation(cfg = {}) {
+  return {
+    savingsTarget: finiteMoney(cfg?.savingsTarget, 'Loan / savings target'),
+    planningWeeks: boundedInteger(cfg?.planningWeeks, 4, 1, 8, 'Planning weeks'),
+    payoutDaysPerWeek: boundedInteger(cfg?.payoutDaysPerWeek, 5, 1, 7, 'Paying days per week'),
+  };
+}
+
 function validateDateKey(date) {
   if (!DATE_RE.test(date)) throw new Error('Invalid date.');
   const [year, month, day] = date.split('-').map(Number);
@@ -97,6 +111,7 @@ function applyMutation(state, action, payload = {}) {
     const month = cleanText(payload.month, 7);
     if (!MONTH_RE.test(month)) throw new Error('Invalid month.');
     const tracking = cleanTracking(payload, month);
+    const allocation = cleanAllocation(payload);
     const conflictingEntry = Object.keys(next.dailySpending || {}).find((date) =>
       date.startsWith(`${month}-`) && Number(date.slice(-2)) < tracking.trackingStartDay
     );
@@ -107,6 +122,7 @@ function applyMutation(state, action, payload = {}) {
       income: finiteMoney(payload.income, 'Income'),
       housing: finiteMoney(payload.housing, 'Housing'),
       reinvestment: finiteMoney(payload.reinvestment, 'Reinvestment'),
+      ...allocation,
       expenses: Array.isArray(payload.expenses) ? payload.expenses.map(cleanExpense) : [],
       ...tracking,
       updatedAt: new Date().toISOString(),
@@ -156,10 +172,13 @@ function applyMutation(state, action, payload = {}) {
       if (!MONTH_RE.test(month)) continue;
       let tracking;
       try { tracking = cleanTracking(cfg || {}, month); } catch { tracking = { trackingStartDay: 1, trackingStartMode: 'fresh', priorNetSpending: 0 }; }
+      let allocation;
+      try { allocation = cleanAllocation(cfg || {}); } catch { allocation = { savingsTarget: 0, planningWeeks: 4, payoutDaysPerWeek: 5 }; }
       validated.months[month] = {
         income: finiteMoney(cfg?.income, 'Income'),
         housing: finiteMoney(cfg?.housing, 'Housing'),
         reinvestment: finiteMoney(cfg?.reinvestment, 'Reinvestment'),
+        ...allocation,
         expenses: Array.isArray(cfg?.expenses) ? cfg.expenses.map(cleanExpense) : [],
         ...tracking,
         updatedAt: cleanText(cfg?.updatedAt, 40) || new Date().toISOString(),
