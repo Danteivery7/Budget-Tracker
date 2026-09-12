@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { getStore } from '@netlify/blobs';
 import { browserTransaction, discoveryTransaction, normalizePlaidTransaction, publicConnectionSummary, reconcileSyncedTransactions, sanitizePlaidAccount } from './bank-core.mjs';
+import { opaqueBankRef } from './bank-crypto.mjs';
 import { readBankData, readVault, writeBankData, writeVault, deleteBankData, connectionById, connectionByItemId } from './bank-store.mjs';
-import { plaidHistoryDays, plaidRequest, plaidWebhookUrl } from './plaid-client.mjs';
+import { plaidHistoryDays, plaidRedirectUri, plaidRequest, plaidWebhookUrl } from './plaid-client.mjs';
 import { ensureSubscriptionShape, markLinkedBankFeedDisconnected, refreshSubscriptionCandidatesFromLinkedBankRows } from './subscriptions-core.mjs';
 
 const BUDGET_STORE = 'budget-tracker';
@@ -11,6 +12,12 @@ const text = (value, max = 160) => String(value ?? '').trim().slice(0, max);
 
 function budgetStore() {
   return getStore({ name: BUDGET_STORE, consistency: 'strong' });
+}
+
+function retentionCutoff(days = plaidHistoryDays(), now = new Date()) {
+  const date = new Date(now.getTime());
+  date.setUTCDate(date.getUTCDate() - days);
+  return date.toISOString().slice(0, 10);
 }
 
 async function updateBudgetSubscriptionDiscovery(vault, now = new Date()) {
@@ -42,8 +49,10 @@ export async function createPlaidLinkToken(request, { connectionId = null } = {}
     client_name: 'Budget Tracker',
     language: 'en',
     country_codes: ['US'],
-    user: { client_user_id: 'budget-tracker-private-user' },
+    user: { client_user_id: opaqueBankRef('single-private-user', 'plaid-user') },
   };
+  const redirectUri = plaidRedirectUri();
+  if (redirectUri) body.redirect_uri = redirectUri;
 
   if (connectionId) {
     const vault = await readVault();
@@ -57,7 +66,36 @@ export async function createPlaidLinkToken(request, { connectionId = null } = {}
   }
 
   const data = await plaidRequest('/link/token/create', body);
-  return { linkToken: data.link_token, expiration: data.expiration || null };
+  return { linkToken: data.link_token, expiration: data.expiration || null, redirectEnabled: Boolean(redirectUri) };
+}
+
+async function fetchTransactionDelta(accessToken, startingCursor, accountLookup) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    let cursor = startingCursor || undefined;
+    let hasMore = true;
+    const added = [];
+    const modified = [];
+    const removed = [];
+    try {
+      while (hasMore) {
+        const response = await plaidRequest('/transactions/sync', {
+          access_token: accessToken,
+          ...(cursor ? { cursor } : {}),
+          options: { include_personal_finance_category: true },
+          count: 500,
+        }, { timeoutMs: 25_000 });
+        for (const row of response.added || []) added.push(normalizePlaidTransaction(row, accountLookup));
+        for (const row of response.modified || []) modified.push(normalizePlaidTransaction(row, accountLookup));
+        for (const row of response.removed || []) removed.push(row);
+        cursor = response.next_cursor || cursor || null;
+        hasMore = response.has_more === true;
+      }
+      return { cursor: cursor || null, added, modified, removed };
+    } catch (error) {
+      if (error.code !== 'TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION' || attempt === 1) throw error;
+    }
+  }
+  throw new Error('Transaction sync could not stabilize.');
 }
 
 async function syncOneConnection(connection, { webhook = false } = {}) {
@@ -65,31 +103,16 @@ async function syncOneConnection(connection, { webhook = false } = {}) {
   const accountsResponse = await plaidRequest('/accounts/get', { access_token: connection.accessToken });
   const rawAccounts = Array.isArray(accountsResponse.accounts) ? accountsResponse.accounts : [];
   const accountLookup = Object.fromEntries(rawAccounts.map((account) => [account.account_id, account]));
-  let cursor = data.cursor || undefined;
-  let hasMore = true;
-  const added = [];
-  const modified = [];
-  const removed = [];
-
-  while (hasMore) {
-    const response = await plaidRequest('/transactions/sync', {
-      access_token: connection.accessToken,
-      ...(cursor ? { cursor } : {}),
-      options: { include_personal_finance_category: true },
-      count: 500,
-    }, { timeoutMs: 25_000 });
-    for (const row of response.added || []) added.push(normalizePlaidTransaction(row, accountLookup));
-    for (const row of response.modified || []) modified.push(normalizePlaidTransaction(row, accountLookup));
-    for (const row of response.removed || []) removed.push(row);
-    cursor = response.next_cursor || cursor || null;
-    hasMore = response.has_more === true;
-  }
+  const delta = await fetchTransactionDelta(connection.accessToken, data.cursor, accountLookup);
+  const cutoff = retentionCutoff();
+  const reconciled = reconcileSyncedTransactions(data.transactions, delta).filter((row) => !row.date || row.date >= cutoff);
 
   const next = {
     ...data,
-    cursor: cursor || null,
+    cursor: delta.cursor,
     accounts: rawAccounts.map(sanitizePlaidAccount),
-    transactions: reconcileSyncedTransactions(data.transactions, { added, modified, removed }),
+    transactions: reconciled,
+    retentionDays: plaidHistoryDays(),
     lastSyncedAt: new Date().toISOString(),
     lastWebhookAt: webhook ? new Date().toISOString() : data.lastWebhookAt || null,
     syncStatus: 'synced',
