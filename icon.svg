@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" rx="120" fill="#0a1020"/>
-  <rect x="56" y="56" width="400" height="400" rx="96" fill="#101a30" stroke="#2a3958" stroke-width="8"/>
-  <text x="256" y="305" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="170" font-weight="800" fill="#4ee2a8">BT</text>
+  <rect width="512" height="512" rx="112" fill="#09090a"/>
+  <rect x="58" y="58" width="396" height="396" rx="88" fill="#141416" stroke="#4a4132" stroke-width="8"/>
+  <text x="256" y="305" text-anchor="middle" font-family="Avenir Next, Segoe UI, Arial, sans-serif" font-size="164" font-weight="700" letter-spacing="4" fill="#c8a766">BT</text>
 </svg>
