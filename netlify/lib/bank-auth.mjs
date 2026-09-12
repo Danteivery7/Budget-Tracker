@@ -14,6 +14,12 @@ function signature(issuedAt) {
   return createHmac('sha256', secret()).update(`bank-session:${issuedAt}`).digest('base64url');
 }
 
+function issuedAtFromToken(token) {
+  const [issuedText] = String(token || '').split('.');
+  const issuedAt = Number(issuedText);
+  return Number.isInteger(issuedAt) ? issuedAt : null;
+}
+
 export function createBankSessionToken(now = Date.now()) {
   const issuedAt = Math.floor(now / 1000);
   return `${issuedAt}.${signature(issuedAt)}`;
@@ -42,6 +48,14 @@ export function clearBankSessionCookie() {
 export function isBankAuthorized(request, now = Date.now()) {
   if (!isAuthenticated(request)) return false;
   return validateBankSessionToken(parseCookies(request)[BANK_COOKIE], now);
+}
+
+export function bankSessionExpiresAt(request, now = Date.now()) {
+  if (!isAuthenticated(request)) return null;
+  const token = parseCookies(request)[BANK_COOKIE];
+  if (!validateBankSessionToken(token, now)) return null;
+  const issuedAt = issuedAtFromToken(token);
+  return issuedAt == null ? null : (issuedAt + BANK_SESSION_SECONDS) * 1000;
 }
 
 export function authorizeBankPassword(input) {
