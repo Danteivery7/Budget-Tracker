@@ -1,53 +1,53 @@
 # Budget Tracker
 
-A private, responsive personal budget tracker built for a simple daily workflow:
+A private, responsive financial operating system for income planning, fiscal-cycle budgeting, protected targets, subscriptions, cards, linked-account intelligence, passkeys, and transaction review.
 
-1. Set monthly income.
-2. Subtract housing and fixed recurring costs.
-3. Set a monthly reinvestment target.
-4. The remaining amount becomes the month's discretionary budget.
-5. The app divides that budget across the exact number of days in the month.
-6. Unused daily allowance rolls forward; overspending reduces future allowance.
-7. The final month balance carries into the next configured month.
+## Core capabilities
 
-## Features
+- Financial cycles anchored to the actual start date rather than the calendar first
+- Persistent approved-plan revisions and deliberate plan-change workflow
+- Business/reinvestment, loan/savings, and personal-spending allocation priorities
+- Adaptive daily spending and purchase planning
+- Cards, recurring expenses, subscription discovery, and payment routing
+- Secure Plaid Transactions integration with encrypted token and transaction storage
+- Separate 15-minute protected-banking session
+- Face ID / Touch ID / Windows Hello / passkey authentication with password fallback
+- Deterministic financial rules and manual Review Inbox
+- Transfer, credit-card payment, refund, recurring-charge, income, and loan-payment reconciliation
+- Append-only tamper-evident financial audit ledger
+- JSON backup/restore and PWA/offline app-shell support
 
-- Mobile, Mac, and desktop responsive UI
-- Monthly income / housing / reinvestment setup
-- Recurring fixed-cost templates with month-specific snapshots
-- Daily spending entry with green / yellow / red pacing
-- Large-purchase recovery / no-spend-day guidance
-- Month-to-month positive or negative carryover
-- Monthly calendar and editable historical entries
-- JSON backup / restore and CSV spending export
-- PWA manifest and offline app-shell caching
-- Private server-side access-code login
-- Cross-device persistence with Netlify Blobs
-- Strong-consistency reads and conditional writes to reduce multi-device overwrite risk
+## Cloudflare architecture
 
-## Netlify deployment
+Production is designed for:
 
-Connect this repository to a Netlify project. No frontend build step is required; `netlify.toml` contains the publish and Functions configuration.
+- **Cloudflare Pages** for static frontend delivery
+- **Cloudflare Pages Functions** for `/api/*`
+- **Cloudflare D1** for persistent application state and optimistic/versioned writes
+- Application-level AES-256-GCM encryption for Plaid tokens and private bank data before D1 storage
+- D1-backed API rate limiting using keyed hashes rather than storing raw source IP addresses
+- Cloudflare encrypted secrets for passwords, Plaid credentials, and the bank encryption key
 
-### Required environment variable
+Netlify services are not required by the Cloudflare deployment.
 
-In Netlify, create this environment variable for the project:
+## Deployment
 
-- `BUDGET_TRACKER_PASSWORD` — the private access code/password you want to use to unlock the tracker.
+See `CLOUDFLARE_SETUP.md` for the exact GitHub → Cloudflare Pages setup, D1 binding, secrets, passkey domain, and Plaid callback/webhook configuration.
 
-After adding or changing the environment variable, redeploy the project so the Functions runtime receives the updated value.
+Cloudflare Pages build settings:
 
-The access code is never shipped to the browser. Successful login creates an HttpOnly, Secure, SameSite=Strict session cookie.
+- Build command: `npm run build`
+- Output directory: `dist`
+- Production branch: `main`
+- D1 binding name: `DB`
 
-## Storage
-
-The backend uses the `budget-tracker` Netlify Blobs store and a site-wide `state` key. Site-wide Blobs persist across future deploys, so changing the website does not erase the financial history.
+The `/functions` directory is bundled by Cloudflare Pages Functions. Only `/api/*` invokes Functions; the rest of the site stays on static Pages delivery.
 
 ## Development checks
 
 ```bash
-npm test
-npm run check
+npm install
+npm run verify
 ```
 
-The core budget math is isolated in `engine.js` and covered by tests for daily carry, month-end carry, reinvestment changes, large overspending recovery, and leap-year month lengths.
+`npm run verify` runs the full budget/security test suite, syntax checks, the static build, and an actual Cloudflare Pages Functions bundle through Wrangler.
