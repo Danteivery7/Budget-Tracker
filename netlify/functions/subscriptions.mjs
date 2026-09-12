@@ -1,6 +1,6 @@
 import { getStore } from '@netlify/blobs';
 import { isAuthenticated, json } from '../lib/auth.mjs';
-import { applySubscriptionMutation, ensureSubscriptionShape, subscriptionView } from '../lib/subscriptions-core.mjs';
+import { applySubscriptionMutation, classifySubscriptionTransaction, ensureSubscriptionShape, subscriptionView } from '../lib/subscriptions-core.mjs';
 
 const STORE_NAME = 'budget-tracker';
 const STATE_KEY = 'state';
@@ -45,6 +45,12 @@ export default async (request) => {
       let body;
       try { body = await request.json(); } catch { return json({ error: 'Invalid JSON.' }, 400); }
       return json(await mutate(store, 'ingestTransactions', { transactions: body?.transactions || [] }));
+    }
+    if (request.method === 'POST' && pathname.endsWith('/classify')) {
+      let body;
+      try { body = await request.json(); } catch { return json({ error: 'Invalid JSON.' }, 400); }
+      const { state } = await readState(store);
+      return json({ result: classifySubscriptionTransaction(state, body?.transaction || {}) });
     }
   } catch (error) {
     return json({ error: error?.message || 'Request failed.' }, 400);
