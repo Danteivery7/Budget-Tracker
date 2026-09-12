@@ -1,78 +1,89 @@
 # Secure Plaid banking setup on Cloudflare
 
-Budget Tracker's linked-account layer is read-only and separate from normal budget state. The application is hosted with Cloudflare Pages Functions + D1; Netlify is not required.
+Budget Tracker's linked-account layer is read-only and separate from normal budget state. The application runs on Cloudflare Pages Functions + D1.
 
-For the complete hosting checklist, start with `CLOUDFLARE_SETUP.md`.
+## Scope
 
-## What the integration requests
-
-- Plaid `transactions` only.
-- No Plaid Auth product.
-- No routing/account-number retrieval.
-- No Identity product.
-- No Transfer or payment-initiation capability.
-- No ability to move money.
-
-Bank credentials are entered only in Plaid Link / the institution OAuth flow. Budget Tracker never receives or stores them.
+The integration requests Plaid `transactions` only. It does not request Auth/account-and-routing credentials, Identity, Transfer, ACH, or money-moving permissions. Bank credentials stay inside Plaid Link / institution OAuth and never pass through Budget Tracker.
 
 ## Private storage model
 
-- Plaid access tokens are stored only in the server-side encrypted bank vault in Cloudflare D1.
-- The entire vault is AES-256-GCM encrypted before D1 receives it.
-- Normalized bank transactions live in a separate encrypted namespace in D1 and are also AES-256-GCM encrypted before storage.
-- The browser never receives access tokens, Plaid Item IDs, Plaid account IDs, or Plaid transaction IDs.
+- Plaid access tokens live only in an AES-256-GCM encrypted server-side vault in D1.
+- Normalized bank transactions live in a separate AES-256-GCM encrypted D1 namespace.
+- Financial rules/manual decisions are stored in the same encrypted banking boundary.
+- The browser never receives access tokens, Item IDs, Plaid account IDs, or Plaid transaction IDs.
 - Browser-facing account/transaction references are opaque HMAC-derived IDs.
-- The normal budget state receives only recurring-charge candidates and small derived summaries.
-- Recent bank activity requires the separate 15-minute banking re-authentication and is kept in page memory only.
+- Raw linked-bank transactions do not automatically alter daily spending.
+- Balances/activity require the separate 15-minute banking re-authentication.
 
-## Cloudflare secrets
+## Required encrypted secrets for banking
 
-Add these in Cloudflare Pages → Settings → Variables and Secrets as encrypted secrets:
+Add these in Cloudflare Pages → Settings → Variables and Secrets:
 
-- `BUDGET_TRACKER_PASSWORD`
 - `PLAID_CLIENT_ID`
 - `PLAID_SECRET`
 - `PLAID_TOKEN_ENCRYPTION_KEY`
+- `BANK_REFERENCE_KEY`
 
-Generate `PLAID_TOKEN_ENCRYPTION_KEY` locally as a fresh random 32-byte Base64 value:
+Generate the two application keys independently as fresh random 32-byte Base64 values:
 
 ```bash
 node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"
 ```
 
-Do not commit or share that value. If it is changed after live accounts are connected, the previous encrypted bank vault cannot be decrypted.
+`PLAID_TOKEN_ENCRYPTION_KEY` protects ciphertext and is designed to rotate. `BANK_REFERENCE_KEY` keeps opaque account/transaction identifiers stable across encryption-key rotations. Do not rotate `BANK_REFERENCE_KEY` during normal AES key rotation.
 
-## Normal variables
+Do not commit or share any secret value.
 
-- `PLAID_ENV` = `sandbox` initially, later `production`
-- `PLAID_TRANSACTION_HISTORY_DAYS` = `180`
-- `PLAID_REDIRECT_URI` = `https://YOUR-HOST/plaid-oauth.html`
-- `PLAID_WEBHOOK_URL` = `https://YOUR-HOST/api/plaid/webhook`
-- `PASSKEY_RP_ID` = your final production hostname
-- `PASSKEY_ORIGIN` = the exact HTTPS production origin
+## Runtime variables
 
-## D1
+- `PLAID_ENV=sandbox` initially, later `production`
+- `PLAID_TRANSACTION_HISTORY_DAYS=180`
+- `PLAID_REDIRECT_URI=https://YOUR-HOST/plaid-oauth.html`
+- `PLAID_WEBHOOK_URL=https://YOUR-HOST/api/plaid/webhook`
 
-Bind the Cloudflare D1 database to the Pages project as `DB`. The app initializes the required tables defensively, and the canonical schema is also committed at `migrations/0001_cloudflare_storage.sql`.
+Passkey overrides are optional when the permanent Cloudflare Pages hostname is used.
 
-## Sandbox verification
+## Sandbox commissioning
 
-1. Sign in to Budget Tracker.
-2. Open **Linked Accounts**.
-3. Re-enter the Budget Tracker access code or use a registered passkey. This creates a separately signed 15-minute banking session.
-4. Select **Connect financial account**.
-5. Complete Plaid Link using Sandbox.
-6. Confirm account summaries and **Recent activity** load.
-7. Confirm recurring-charge discovery and the Review Inbox receive expected test activity.
-8. Test **Disconnect** and confirm the connection and encrypted local bank cache are removed.
+Use **System Health** for the controlled commissioning flow. When Sandbox is fully configured it can:
 
-Do not switch to Plaid Production until the complete Sandbox flow succeeds.
+1. create a dynamic Plaid Transactions Sandbox Item using Plaid's supported Link-bypass endpoint;
+2. perform the initial `/transactions/sync` through the same encrypted vault/cache path used by Production;
+3. create custom Sandbox transactions and sync them;
+4. fire a `SYNC_UPDATES_AVAILABLE` Sandbox webhook;
+5. expose health/reconciliation/review counts without exposing provider tokens to the browser.
+
+The deterministic synthetic stress test should also be green before relying on Sandbox results.
+
+Do not switch to Production until recurring discovery, Review Inbox, card-payment settlement, transfer, refund, webhook, and disconnect behavior have all been inspected.
+
+## Encryption-key rotation
+
+Never replace the only encryption key after data exists. Instead:
+
+1. generate a new key;
+2. set the new value as `PLAID_TOKEN_ENCRYPTION_KEY`;
+3. temporarily set the old value as `PLAID_TOKEN_ENCRYPTION_KEY_PREVIOUS`;
+4. redeploy;
+5. open **System Health** and run the protected re-encryption action;
+6. confirm previous-key records are zero and unreadable records are zero;
+7. remove `PLAID_TOKEN_ENCRYPTION_KEY_PREVIOUS` and redeploy.
+
+The backend can decrypt with current-or-previous during the transition but always writes new ciphertext with the current key.
+
+## Recovery
+
+System Health can export logical D1 application state. The browser encrypts that export using a user-chosen recovery passphrase before download. The recovery passphrase never reaches the server, and the file never contains Plaid/Cloudflare secrets or the AES encryption key.
+
+Cloudflare D1 Time Travel is the preferred exact point-in-time rollback layer; the portable recovery file is a disaster-recovery/merge layer.
 
 ## Security behavior
 
-- Banking POST requests require same-origin checks in addition to SameSite cookies.
-- Bank balances and activity require the normal app login plus a separate short-lived banking session.
-- Plaid webhooks require ES256 JWT verification, freshness validation, and timing-safe SHA-256 request-body verification.
-- Link is loaded directly from Plaid's official CDN and is restricted by Content Security Policy.
-- Raw linked-bank transactions remain separate from the normal budget state.
-- D1-based API rate limiting stores only keyed hashes of source IP addresses, never raw IP values.
+- same-origin validation for sensitive POSTs;
+- HttpOnly/Secure/SameSite cookies;
+- separate 15-minute protected banking session;
+- ES256 Plaid webhook JWT verification plus request-body hash/freshness checks;
+- D1-backed rate limiting with keyed IP hashes;
+- append-only tamper-evident audit chain;
+- automatic banking lock and in-memory clearing of private browser activity.
