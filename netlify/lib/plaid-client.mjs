@@ -2,6 +2,7 @@ const HOSTS = {
   sandbox: 'https://sandbox.plaid.com',
   production: 'https://production.plaid.com',
 };
+const DEFAULT_API_VERSION = '2020-09-14';
 
 export function plaidEnvironment() {
   const value = String(process.env.PLAID_ENV || 'sandbox').trim().toLowerCase();
@@ -32,6 +33,7 @@ export async function plaidRequest(path, body = {}, { timeoutMs = 15_000 } = {})
       'content-type': 'application/json',
       'PLAID-CLIENT-ID': process.env.PLAID_CLIENT_ID,
       'PLAID-SECRET': process.env.PLAID_SECRET,
+      'Plaid-Version': String(process.env.PLAID_API_VERSION || DEFAULT_API_VERSION),
     },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(timeoutMs),
