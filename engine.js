@@ -54,6 +54,53 @@ export function dailyAmounts(entry = {}) {
   return { spent, refunded, net: roundMoney(spent - refunded) };
 }
 
+export function allocationBreakdown(cfg = {}, carryIn = 0) {
+  const income = roundMoney(Number(cfg?.income || 0));
+  const housing = roundMoney(Number(cfg?.housing || 0));
+  const recurringTotal = sumExpenses(cfg?.expenses || []);
+  const fixedTotal = roundMoney(housing + recurringTotal);
+  const reinvestment = roundMoney(Number(cfg?.reinvestment || 0));
+  const savingsTarget = roundMoney(Number(cfg?.savingsTarget || 0));
+  const planningWeeksRaw = Number(cfg?.planningWeeks || 4);
+  const payoutDaysRaw = Number(cfg?.payoutDaysPerWeek || 5);
+  const planningWeeks = Number.isInteger(planningWeeksRaw) && planningWeeksRaw > 0 ? planningWeeksRaw : 4;
+  const payoutDaysPerWeek = Number.isInteger(payoutDaysRaw) && payoutDaysRaw > 0 ? payoutDaysRaw : 5;
+  const payoutDays = planningWeeks * payoutDaysPerWeek;
+  const personalFromIncome = roundMoney(income - fixedTotal - reinvestment - savingsTarget);
+  const spendable = roundMoney(personalFromIncome + Number(carryIn || 0));
+  const weekly = {
+    income: roundMoney(income / planningWeeks),
+    reinvestment: roundMoney(reinvestment / planningWeeks),
+    savingsTarget: roundMoney(savingsTarget / planningWeeks),
+    fixedCosts: roundMoney(fixedTotal / planningWeeks),
+    personalSpending: roundMoney(personalFromIncome / planningWeeks),
+  };
+  const perPayingDay = {
+    income: roundMoney(income / payoutDays),
+    reinvestment: roundMoney(reinvestment / payoutDays),
+    savingsTarget: roundMoney(savingsTarget / payoutDays),
+    fixedCosts: roundMoney(fixedTotal / payoutDays),
+    personalSpending: roundMoney(personalFromIncome / payoutDays),
+  };
+  return {
+    income,
+    housing,
+    recurringTotal,
+    fixedTotal,
+    reinvestment,
+    savingsTarget,
+    planningWeeks,
+    payoutDaysPerWeek,
+    payoutDays,
+    personalFromIncome,
+    carryIn: roundMoney(carryIn),
+    spendable,
+    weekly,
+    perPayingDay,
+    overAllocated: personalFromIncome < -0.005,
+  };
+}
+
 export function trackingSettings(cfg = {}, monthKey, spendable = 0) {
   const dim = daysInMonth(monthKey);
   const parsedDay = Number(cfg?.trackingStartDay || 1);
@@ -90,8 +137,8 @@ export function calculateCarryInto(data, targetMonthKey) {
   let carry = 0;
   for (const key of keys) {
     const cfg = data.months[key];
-    const fixed = Number(cfg.housing || 0) + sumExpenses(cfg.expenses || []);
-    const spendable = roundMoney(Number(cfg.income || 0) - fixed - Number(cfg.reinvestment || 0) + carry);
+    const allocation = allocationBreakdown(cfg, carry);
+    const spendable = allocation.spendable;
     const tracking = trackingSettings(cfg, key, spendable);
     const totals = trackedEntryTotals(data, key, tracking.startDay);
     carry = roundMoney(spendable - tracking.openingAdjustment - totals.netSpent);
@@ -137,9 +184,8 @@ export function calculateDay(data, dateKey) {
   if (day < 1 || day > dim) return null;
 
   const carryIn = calculateCarryInto(data, monthKey);
-  const recurringTotal = sumExpenses(cfg.expenses || []);
-  const fixedTotal = roundMoney(Number(cfg.housing || 0) + recurringTotal);
-  const spendable = roundMoney(Number(cfg.income || 0) - fixedTotal - Number(cfg.reinvestment || 0) + carryIn);
+  const allocation = allocationBreakdown(cfg, carryIn);
+  const { recurringTotal, fixedTotal, spendable } = allocation;
   const baseExact = spendable / dim;
   const baseDaily = roundMoney(baseExact);
   const tracking = trackingSettings(cfg, monthKey, spendable);
@@ -152,6 +198,7 @@ export function calculateDay(data, dateKey) {
       carryIn,
       recurringTotal,
       fixedTotal,
+      savingsTarget: allocation.savingsTarget,
       spendable,
       baseDaily,
       trackingStarted: false,
@@ -190,6 +237,7 @@ export function calculateDay(data, dateKey) {
     carryIn,
     recurringTotal,
     fixedTotal,
+    savingsTarget: allocation.savingsTarget,
     spendable,
     baseDaily,
     trackingStarted: true,
@@ -225,6 +273,7 @@ export function calculateMonth(data, monthKey) {
       recurringTotal: 0,
       fixedTotal: 0,
       reinvestment: 0,
+      savingsTarget: 0,
       spendable: carryIn,
       spent: totals.netSpent,
       grossSpent: totals.grossSpent,
@@ -237,15 +286,12 @@ export function calculateMonth(data, monthKey) {
       daysInMonth: dim,
       trackingStartDay: 1,
       trackingStartMode: 'fresh',
+      allocation: allocationBreakdown({}, carryIn),
     };
   }
 
-  const recurringTotal = sumExpenses(cfg.expenses || []);
-  const housing = roundMoney(Number(cfg.housing || 0));
-  const fixedTotal = roundMoney(housing + recurringTotal);
-  const income = roundMoney(Number(cfg.income || 0));
-  const reinvestment = roundMoney(Number(cfg.reinvestment || 0));
-  const spendable = roundMoney(income - fixedTotal - reinvestment + carryIn);
+  const allocation = allocationBreakdown(cfg, carryIn);
+  const { recurringTotal, housing, fixedTotal, income, reinvestment, savingsTarget, spendable } = allocation;
   const tracking = trackingSettings(cfg, monthKey, spendable);
   const totals = trackedEntryTotals(data, monthKey, tracking.startDay);
   const effectiveUsed = roundMoney(tracking.openingAdjustment + totals.netSpent);
@@ -259,6 +305,7 @@ export function calculateMonth(data, monthKey) {
     recurringTotal,
     fixedTotal,
     reinvestment,
+    savingsTarget,
     spendable,
     spent: effectiveUsed,
     grossSpent: totals.grossSpent,
@@ -273,6 +320,7 @@ export function calculateMonth(data, monthKey) {
     trackingStartMode: tracking.startMode,
     priorNetSpending: tracking.priorNetSpending,
     expenses: cfg.expenses || [],
+    allocation,
   };
 }
 
@@ -285,6 +333,9 @@ export function suggestedMonthValues(data, monthKey) {
     income: Number(previous?.income || 0),
     housing: Number(previous?.housing || 0),
     reinvestment: Number(previous?.reinvestment || 0),
+    savingsTarget: Number(previous?.savingsTarget || 0),
+    planningWeeks: Number(previous?.planningWeeks || 4),
+    payoutDaysPerWeek: Number(previous?.payoutDaysPerWeek || 5),
     expenses: structuredClone((data.recurringExpenses?.length ? data.recurringExpenses : previous?.expenses) || []),
     trackingStartDay: 1,
     trackingStartMode: 'fresh',
