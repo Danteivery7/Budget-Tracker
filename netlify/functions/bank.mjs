@@ -1,5 +1,5 @@
 import { isAuthenticated, json } from '../lib/auth.mjs';
-import { authorizeBankPassword, bankSessionCookie, clearBankSessionCookie, isBankAuthorized, requireSameOrigin, BANK_SESSION_MINUTES } from '../lib/bank-auth.mjs';
+import { authorizeBankPassword, bankSessionCookie, bankSessionExpiresAt, clearBankSessionCookie, isBankAuthorized, requireSameOrigin, BANK_SESSION_MINUTES } from '../lib/bank-auth.mjs';
 import { bankEncryptionConfigured } from '../lib/bank-crypto.mjs';
 import { createPlaidLinkToken, disconnectConnection, exchangePublicToken, listPublicConnections, recentTransactions, syncConnection } from '../lib/bank-service.mjs';
 import { plaidConfigured, plaidEnvironment, plaidHistoryDays } from '../lib/plaid-client.mjs';
@@ -30,7 +30,8 @@ export default async (request) => {
   if (!isAuthenticated(request)) return json({ error: 'Unauthorized.' }, 401);
 
   if (request.method === 'GET' && pathname.endsWith('/session')) {
-    return json({ authorized: isBankAuthorized(request), setup: setupStatus() });
+    const authorized = isBankAuthorized(request);
+    return json({ authorized, expiresAt: authorized ? bankSessionExpiresAt(request) : null, setup: setupStatus() });
   }
 
   if (request.method === 'POST' && !requireSameOrigin(request)) return json({ error: 'Invalid request origin.' }, 403);
@@ -39,11 +40,12 @@ export default async (request) => {
     let body = {};
     try { body = await request.json(); } catch { return json({ error: 'Invalid request.' }, 400); }
     if (!authorizeBankPassword(body?.password || '')) return json({ error: 'Incorrect access code.' }, 401);
-    return json({ authorized: true, setup: setupStatus() }, 200, { 'set-cookie': bankSessionCookie() });
+    const now = Date.now();
+    return json({ authorized: true, expiresAt: now + BANK_SESSION_MINUTES * 60 * 1000, setup: setupStatus() }, 200, { 'set-cookie': bankSessionCookie(now) });
   }
 
   if (request.method === 'POST' && pathname.endsWith('/lock')) {
-    return json({ authorized: false }, 200, { 'set-cookie': clearBankSessionCookie() });
+    return json({ authorized: false, expiresAt: null }, 200, { 'set-cookie': clearBankSessionCookie() });
   }
 
   if (!isBankAuthorized(request)) return json({ error: 'Banking session locked. Re-enter your access code.' }, 403);
