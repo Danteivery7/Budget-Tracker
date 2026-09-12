@@ -2,6 +2,7 @@ import { authenticateWithPasskey, passkeysSupported, passkeyStatus } from './pas
 
 const button = document.querySelector('#passkeyLoginButton');
 const note = document.querySelector('#passkeyLoginNote');
+const privacy = document.querySelector('#passkeyPrivacyNote');
 
 async function refresh() {
   if (!button || !passkeysSupported()) return;
@@ -10,6 +11,7 @@ async function refresh() {
     if (!status.available) return;
     button.hidden = false;
     if (note) note.hidden = false;
+    if (privacy) privacy.hidden = false;
   } catch { /* password login remains available */ }
 }
 
