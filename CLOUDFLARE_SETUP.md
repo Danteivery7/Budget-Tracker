@@ -21,7 +21,7 @@ Create one D1 database named `budget-tracker` and bind it to the Pages project w
 
 `DB`
 
-Add the binding to Production and Preview if preview branches should have a working backend. For maximum isolation, use a separate preview D1 database.
+The production D1 binding is managed through `wrangler.jsonc`, so Cloudflare may show the dashboard binding controls as read-only. That is expected.
 
 The runtime creates its required tables defensively on first use. The canonical schema is also committed at:
 
@@ -31,9 +31,10 @@ The D1 store preserves the optimistic/versioned writes previously used by the ap
 
 ## 3. Add encrypted secrets
 
-In Cloudflare Pages → Settings → Variables and Secrets, add these as encrypted secrets:
+In Cloudflare Pages → Settings → Variables and Secrets, add `BUDGET_TRACKER_PASSWORD` as an encrypted secret.
 
-- `BUDGET_TRACKER_PASSWORD`
+Plaid secrets can remain unset until banking commissioning begins. At that stage add these as encrypted secrets:
+
 - `PLAID_CLIENT_ID`
 - `PLAID_SECRET`
 - `PLAID_TOKEN_ENCRYPTION_KEY`
@@ -46,14 +47,12 @@ A local example command for generating one is:
 node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"
 ```
 
-## 4. Add normal runtime variables
+## 4. Add normal runtime variables for Plaid when ready
 
-Set these as normal Cloudflare variables as appropriate:
+These can wait until Plaid Sandbox commissioning:
 
 - `PLAID_ENV` = `sandbox` while testing, later `production`
 - `PLAID_TRANSACTION_HISTORY_DAYS` = `180`
-- `PASSKEY_RP_ID` = your production hostname only, such as `budget.example.com`
-- `PASSKEY_ORIGIN` = the exact HTTPS production origin, such as `https://budget.example.com`
 - `PLAID_REDIRECT_URI` = `https://YOUR_HOST/plaid-oauth.html`
 - `PLAID_WEBHOOK_URL` = `https://YOUR_HOST/api/plaid/webhook`
 
@@ -61,11 +60,19 @@ Set these as normal Cloudflare variables as appropriate:
 
 ## 5. Passkeys
 
-Register permanent Face ID / Touch ID / Windows Hello passkeys only on the final production hostname. WebAuthn credentials are scoped to the relying-party domain.
+If the permanent production hostname is the existing Cloudflare Pages hostname, no additional passkey environment variables are required. The WebAuthn backend derives the exact HTTPS origin and relying-party hostname from the production request, so a credential registered from that site is scoped to that hostname automatically.
+
+Optional `PASSKEY_RP_ID` and `PASSKEY_ORIGIN` overrides remain supported for a future custom-domain migration, but they are not required for the permanent Pages hostname.
+
+Register Face ID / Touch ID / Windows Hello passkeys from **Security & Audit** on the permanent production site. The UI shows the hostname the passkey will belong to and proposes a device-appropriate label that can be edited before registration.
 
 The password remains available as a recovery/fallback path. A registered passkey can also satisfy the separate 15-minute banking re-authentication.
 
-## 6. Plaid
+## 6. Automatic day rollover
+
+The production frontend watches the local calendar boundary. Just after local midnight it reloads the authoritative budget state so Today, fiscal-cycle calculations, daily allowance, and the date label advance without manual action. It also re-checks the date when the page is restored, focused, brought back from the background, or comes back online, covering phones and computers that were asleep at midnight.
+
+## 7. Plaid
 
 Start with Plaid Sandbox. After the Pages deployment and final hostname are stable:
 
@@ -76,7 +83,7 @@ Start with Plaid Sandbox. After the Pages deployment and final hostname are stab
 
 The Budget Tracker requests the Transactions product only. It does not request Auth/account-and-routing credentials, Identity, Transfer, ACH, or money-moving capabilities.
 
-## 7. Security model after migration
+## 8. Security model after migration
 
 - Static frontend assets are built into `dist`; server modules are not published as static files.
 - API requests execute in Cloudflare Pages Functions.
@@ -87,7 +94,7 @@ The Budget Tracker requests the Transactions product only. It does not request A
 - Static responses use the committed `_headers` policy.
 - Financial ledger entries remain append-only/tamper-evident with hash-chain verification.
 
-## 8. Local verification
+## 9. Local verification
 
 ```bash
 npm install
