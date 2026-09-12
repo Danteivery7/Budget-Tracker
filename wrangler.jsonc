@@ -3,6 +3,13 @@
   "name": "budget-tracker",
   "pages_build_output_dir": "./dist",
   "compatibility_date": "2026-09-12",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "budget-tracker",
+      "database_id": "51d0b177-4408-44df-b204-16ef521c2afe"
+    }
+  ],
   "vars": {
     "SITE_ID": "budget-tracker-cloudflare"
   }
