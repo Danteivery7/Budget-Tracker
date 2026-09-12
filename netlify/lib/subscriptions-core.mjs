@@ -32,6 +32,9 @@ export function ensureSubscriptionShape(sourceState) {
   const state = ensureCardsShape(sourceState || {});
   state.subscriptionFeedTransactions = Array.isArray(state.subscriptionFeedTransactions) ? state.subscriptionFeedTransactions : [];
   state.subscriptionCandidates = Array.isArray(state.subscriptionCandidates) ? state.subscriptionCandidates : [];
+  state.subscriptionFeedSummary = state.subscriptionFeedSummary && typeof state.subscriptionFeedSummary === 'object' && !Array.isArray(state.subscriptionFeedSummary)
+    ? state.subscriptionFeedSummary
+    : { transactionCount: 0, lastTransactionDate: null, connected: false, updatedAt: null };
   const settings = state.subscriptionSettings && typeof state.subscriptionSettings === 'object' && !Array.isArray(state.subscriptionSettings)
     ? state.subscriptionSettings
     : {};
@@ -71,6 +74,35 @@ function refreshCandidates(state) {
     state.subscriptionFeedTransactions.filter((row) => row.posted !== false),
     state.subscriptionCandidates,
   );
+  return state;
+}
+
+export function refreshSubscriptionCandidatesFromLinkedBankRows(sourceState, rows = [], now = new Date()) {
+  const state = ensureSubscriptionShape(sourceState || {});
+  const safeRows = (Array.isArray(rows) ? rows : []).filter((row) => row && row.posted !== false && row.date && Number(row.amount) > 0);
+  if (state.subscriptionSettings.discoveryEnabled) {
+    state.subscriptionCandidates = detectRecurringCharges(safeRows, state.subscriptionCandidates);
+  }
+  const dates = safeRows.map((row) => String(row.date || '')).filter(Boolean).sort();
+  state.subscriptionFeedSummary = {
+    transactionCount: safeRows.length,
+    lastTransactionDate: dates.at(-1) || null,
+    connected: true,
+    updatedAt: now.toISOString(),
+  };
+  state.updatedAt = now.toISOString();
+  return state;
+}
+
+export function markLinkedBankFeedDisconnected(sourceState, remainingTransactionCount = 0, now = new Date()) {
+  const state = ensureSubscriptionShape(sourceState || {});
+  state.subscriptionFeedSummary = {
+    transactionCount: Math.max(0, Number(remainingTransactionCount || 0)),
+    lastTransactionDate: state.subscriptionFeedSummary?.lastTransactionDate || null,
+    connected: remainingTransactionCount > 0,
+    updatedAt: now.toISOString(),
+  };
+  state.updatedAt = now.toISOString();
   return state;
 }
 
@@ -249,14 +281,18 @@ export function applySubscriptionMutation(sourceState, action, payload = {}, now
 
 export function subscriptionView(state) {
   const normalized = ensureSubscriptionShape(structuredClone(state || {}));
+  const manualDates = normalized.subscriptionFeedTransactions.map((item) => item.date).filter(Boolean).sort();
+  const manualLinked = normalized.subscriptionFeedTransactions.some((item) => item.source === 'linked-account');
+  const summary = normalized.subscriptionFeedSummary || {};
   return {
     candidates: normalized.subscriptionCandidates,
     settings: normalized.subscriptionSettings,
     routing: buildSubscriptionRoutingSummary(normalized),
     feed: {
-      transactionCount: normalized.subscriptionFeedTransactions.length,
-      lastTransactionDate: normalized.subscriptionFeedTransactions.map((item) => item.date).sort().at(-1) || null,
-      connected: normalized.subscriptionFeedTransactions.some((item) => item.source === 'linked-account'),
+      transactionCount: Math.max(Number(summary.transactionCount || 0), normalized.subscriptionFeedTransactions.length),
+      lastTransactionDate: summary.lastTransactionDate || manualDates.at(-1) || null,
+      connected: summary.connected === true || manualLinked,
+      updatedAt: summary.updatedAt || null,
     },
   };
 }
@@ -266,6 +302,7 @@ export function copySubscriptionsForImport(source, target) {
   const normalized = ensureSubscriptionShape(structuredClone(source || {}));
   target.subscriptionFeedTransactions = normalized.subscriptionFeedTransactions;
   target.subscriptionCandidates = normalized.subscriptionCandidates;
+  target.subscriptionFeedSummary = normalized.subscriptionFeedSummary;
   target.subscriptionSettings = normalized.subscriptionSettings;
   target.subscriptionReviewLog = normalized.subscriptionReviewLog;
   return target;

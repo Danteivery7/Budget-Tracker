@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#09090a" />
+  <title>Returning to Budget Tracker</title>
+  <style>html,body{margin:0;min-height:100%;background:#09090a;color:#ece8df;font-family:"Avenir Next","Segoe UI Variable",system-ui,sans-serif}main{min-height:100vh;display:grid;place-items:center;padding:24px;box-sizing:border-box}.box{width:min(100%,480px);padding:28px;border:1px solid #29292e;border-radius:12px;background:#121214}p{color:#98948c;line-height:1.6}button{min-height:42px;padding:0 16px;border:0;border-radius:8px;background:#c8a766;color:#15120d;font-weight:700}</style>
+</head>
+<body>
+  <main><section class="box"><p style="font-size:10px;letter-spacing:.16em">SECURE BANK RETURN</p><h1 style="font-size:24px">Returning to Budget Tracker</h1><p id="oauthStatus">Resuming the secure bank connection…</p><button id="oauthReturn" type="button" hidden>Return to Budget Tracker</button></section></main>
+  <script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
+  <script type="module" src="/plaid-oauth.js"></script>
+</body>
+</html>

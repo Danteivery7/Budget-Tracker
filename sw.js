@@ -1,5 +1,5 @@
-const CACHE = 'budget-tracker-v10';
-const STATIC = ['/', '/index.html', '/styles.css', '/purchase-planner.css', '/professional.css', '/subscriptions.css', '/plan-change.css', '/plan-bootstrap.js', '/financial-cycle.js', '/fiscal-runtime.js', '/app.js', '/engine.js', '/refunds.js', '/start.js', '/allocations.js', '/cards.js', '/subscription-engine.js', '/subscriptions.js', '/purchase-engine.js', '/purchase-planner.js', '/setup-engine.js', '/setup-wizard.js', '/plan-change.js', '/ui-polish.js', '/manifest.webmanifest', '/icon.svg'];
+const CACHE = 'budget-tracker-v11';
+const STATIC = ['/', '/index.html', '/styles.css', '/purchase-planner.css', '/professional.css', '/subscriptions.css', '/plan-change.css', '/banking.css', '/plan-bootstrap.js', '/financial-cycle.js', '/fiscal-runtime.js', '/app.js', '/engine.js', '/refunds.js', '/start.js', '/allocations.js', '/cards.js', '/subscription-engine.js', '/subscriptions.js', '/purchase-engine.js', '/purchase-planner.js', '/setup-engine.js', '/setup-wizard.js', '/plan-change.js', '/banking.js', '/ui-polish.js', '/manifest.webmanifest', '/icon.svg'];
 self.addEventListener('install', (event) => { event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(STATIC))); self.skipWaiting(); });
 self.addEventListener('activate', (event) => { event.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((key) => key !== CACHE).map((key) => caches.delete(key))))); self.clients.claim(); });
 self.addEventListener('fetch', (event) => {
