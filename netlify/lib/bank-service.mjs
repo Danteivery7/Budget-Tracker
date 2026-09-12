@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { getStore } from '@netlify/blobs';
 import { browserTransaction, discoveryTransaction, normalizePlaidTransaction, publicConnectionSummary, reconcileSyncedTransactions, sanitizePlaidAccount } from './bank-core.mjs';
 import { opaqueBankRef } from './bank-crypto.mjs';
-import { readBankData, readVault, writeBankData, writeVault, deleteBankData, connectionById, connectionByItemId } from './bank-store.mjs';
+import { readBankData, readVault, mutateVault, writeBankData, deleteBankData, connectionById, connectionByItemId } from './bank-store.mjs';
 import { plaidHistoryDays, plaidRedirectUri, plaidRequest, plaidWebhookUrl } from './plaid-client.mjs';
 import { ensureSubscriptionShape, markLinkedBankFeedDisconnected, refreshSubscriptionCandidatesFromLinkedBankRows } from './subscriptions-core.mjs';
 
@@ -123,14 +123,17 @@ async function syncOneConnection(connection, { webhook = false } = {}) {
 }
 
 async function markConnectionIssue(connectionId, code = 'CONNECTION_ERROR') {
-  const vault = await readVault();
-  const connection = connectionById(vault, connectionId);
-  if (connection) {
+  let found = false;
+  await mutateVault((vault) => {
+    const connection = connectionById(vault, connectionId);
+    if (!connection) return vault;
+    found = true;
     connection.status = 'needs_repair';
     connection.updatedAt = new Date().toISOString();
     connection.lastErrorCode = text(code, 80);
-    await writeVault(vault);
-  }
+    return vault;
+  });
+  if (!found) return;
   const data = await readBankData(connectionId);
   data.syncStatus = 'needs_repair';
   data.errorCode = text(code, 80);
@@ -141,21 +144,24 @@ export async function exchangePublicToken(publicToken, institutionName = '') {
   const token = text(publicToken, 500);
   if (!token) throw new Error('Plaid did not return a public token.');
   const exchanged = await plaidRequest('/item/public_token/exchange', { public_token: token });
-  const vault = await readVault();
-  const existing = connectionByItemId(vault, exchanged.item_id);
   const nowIso = new Date().toISOString();
-  const connection = existing || {
-    connectionId: randomUUID(),
-    itemId: exchanged.item_id,
-    createdAt: nowIso,
-  };
-  connection.accessToken = exchanged.access_token;
-  connection.institutionName = text(institutionName, 100) || connection.institutionName || 'Financial institution';
-  connection.status = 'connected';
-  connection.updatedAt = nowIso;
-  connection.lastErrorCode = null;
-  if (!existing) vault.connections.push(connection);
-  await writeVault(vault);
+  let connection = null;
+  await mutateVault((vault) => {
+    const existing = connectionByItemId(vault, exchanged.item_id);
+    const target = existing || {
+      connectionId: randomUUID(),
+      itemId: exchanged.item_id,
+      createdAt: nowIso,
+    };
+    target.accessToken = exchanged.access_token;
+    target.institutionName = text(institutionName, 100) || target.institutionName || 'Financial institution';
+    target.status = 'connected';
+    target.updatedAt = nowIso;
+    target.lastErrorCode = null;
+    if (!existing) vault.connections.push(target);
+    connection = structuredClone(target);
+    return vault;
+  });
 
   let bankData;
   try {
@@ -170,16 +176,24 @@ export async function exchangePublicToken(publicToken, institutionName = '') {
 
 export async function syncConnection(connectionId, options = {}) {
   const vault = await readVault();
-  const connection = connectionById(vault, connectionId);
-  if (!connection) throw new Error('Bank connection not found.');
+  const existing = connectionById(vault, connectionId);
+  if (!existing) throw new Error('Bank connection not found.');
+  const connection = structuredClone(existing);
   try {
     const data = await syncOneConnection(connection, options);
-    connection.status = 'connected';
-    connection.updatedAt = new Date().toISOString();
-    connection.lastErrorCode = null;
-    await writeVault(vault);
-    await updateBudgetSubscriptionDiscovery(vault);
-    return publicConnectionSummary(connection, data);
+    let updatedConnection = connection;
+    await mutateVault((latest) => {
+      const target = connectionById(latest, connectionId);
+      if (!target) throw new Error('Bank connection was removed during sync.');
+      target.status = 'connected';
+      target.updatedAt = new Date().toISOString();
+      target.lastErrorCode = null;
+      updatedConnection = structuredClone(target);
+      return latest;
+    });
+    const currentVault = await readVault();
+    await updateBudgetSubscriptionDiscovery(currentVault);
+    return publicConnectionSummary(updatedConnection, data);
   } catch (error) {
     await markConnectionIssue(connectionId, error.code || 'SYNC_FAILED');
     throw error;
@@ -261,9 +275,11 @@ export async function disconnectConnection(connectionId) {
   try { await plaidRequest('/item/remove', { access_token: connection.accessToken }); } catch (error) {
     if (error.code !== 'ITEM_NOT_FOUND') throw error;
   }
-  vault.connections = vault.connections.filter((item) => item.connectionId !== connectionId);
-  await writeVault(vault);
+  await mutateVault((latest) => {
+    latest.connections = latest.connections.filter((item) => item.connectionId !== connectionId);
+    return latest;
+  });
   await deleteBankData(connectionId);
-  await updateBudgetSubscriptionDiscovery(vault);
+  await updateBudgetSubscriptionDiscovery(await readVault());
   return true;
 }
