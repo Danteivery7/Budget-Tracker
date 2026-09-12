@@ -1,0 +1,262 @@
+import { randomUUID } from 'node:crypto';
+import { getStore } from '@netlify/blobs';
+import { isAuthenticated, json } from '../lib/auth.mjs';
+import { copyCardsForImport } from '../lib/cards-core.mjs';
+import { copySubscriptionsForImport, ensureSubscriptionShape } from '../lib/subscriptions-core.mjs';
+import { copyPlanForImport, cycleForDate, ensurePlanShape } from '../lib/plan-core.mjs';
+
+const STORE_NAME = 'budget-tracker';
+const STATE_KEY = 'state';
+const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+const DATE_RE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+
+function normalize(state = {}) {
+  return ensurePlanShape(ensureSubscriptionShape(state));
+}
+
+function freshState() {
+  const now = new Date().toISOString();
+  return normalize({ version: 3, createdAt: now, updatedAt: now, recurringExpenses: [], months: {}, dailySpending: {} });
+}
+
+function finiteMoney(value, label) {
+  const number = Number(value ?? 0);
+  if (!Number.isFinite(number) || number < 0 || number > 1_000_000_000) throw new Error(`${label} must be a valid non-negative number.`);
+  return Math.round((number + Number.EPSILON) * 100) / 100;
+}
+
+function signedMoney(value, label) {
+  const number = Number(value ?? 0);
+  if (!Number.isFinite(number) || Math.abs(number) > 1_000_000_000) throw new Error(`${label} must be a valid number.`);
+  return Math.round((number + Number.EPSILON) * 100) / 100;
+}
+
+function boundedInteger(value, fallback, min, max, label) {
+  const number = Number(value ?? fallback);
+  if (!Number.isInteger(number) || number < min || number > max) throw new Error(`${label} must be a whole number from ${min} to ${max}.`);
+  return number;
+}
+
+function cleanText(value, max = 120) {
+  return String(value || '').trim().slice(0, max);
+}
+
+function cleanExpense(item) {
+  return {
+    id: cleanText(item?.id, 80) || randomUUID(),
+    name: cleanText(item?.name, 80) || 'Fixed expense',
+    category: cleanText(item?.category, 40) || 'Other',
+    amount: finiteMoney(item?.amount, 'Expense amount'),
+  };
+}
+
+function cleanDailyEntry(entry, preserveTimestamp = false) {
+  return {
+    amount: finiteMoney(entry?.amount, 'Daily spending'),
+    refund: finiteMoney(entry?.refund, 'Money back / refunds'),
+    note: cleanText(entry?.note, 200),
+    refundNote: cleanText(entry?.refundNote, 200),
+    updatedAt: preserveTimestamp ? (cleanText(entry?.updatedAt, 40) || new Date().toISOString()) : new Date().toISOString(),
+  };
+}
+
+function daysInMonth(monthKey) {
+  const [year, month] = monthKey.split('-').map(Number);
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
+function cleanTracking(cfg, month) {
+  const maxDay = daysInMonth(month);
+  const rawDay = Number(cfg?.trackingStartDay ?? 1);
+  if (!Number.isFinite(rawDay) || rawDay < 1 || rawDay > maxDay || !Number.isInteger(rawDay)) throw new Error('Tracking start day is invalid.');
+  const trackingStartDay = rawDay;
+  const trackingStartMode = cfg?.trackingStartMode === 'actual' ? 'actual' : 'fresh';
+  const priorNetSpending = trackingStartDay === 1 || trackingStartMode === 'fresh'
+    ? 0
+    : signedMoney(cfg?.priorNetSpending, 'Prior net spending');
+  return { trackingStartDay, trackingStartMode, priorNetSpending };
+}
+
+function cleanAllocation(cfg = {}) {
+  return {
+    savingsTarget: finiteMoney(cfg?.savingsTarget, 'Loan / savings target'),
+    planningWeeks: boundedInteger(cfg?.planningWeeks, 4, 1, 8, 'Planning weeks'),
+    payoutDaysPerWeek: boundedInteger(cfg?.payoutDaysPerWeek, 5, 1, 7, 'Paying days per week'),
+  };
+}
+
+function validateDateKey(date) {
+  if (!DATE_RE.test(date)) throw new Error('Invalid date.');
+  const [year, month, day] = date.split('-').map(Number);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  if (parsed.getUTCFullYear() !== year || parsed.getUTCMonth() !== month - 1 || parsed.getUTCDate() !== day) throw new Error('Invalid date.');
+}
+
+function linkedCardTotals(state, date) {
+  let purchases = 0;
+  let refunds = 0;
+  for (const transaction of state.cardTransactions || []) {
+    if (transaction?.date !== date) continue;
+    if (transaction.kind === 'refund') refunds += Number(transaction.amount || 0);
+    else purchases += Number(transaction.amount || 0);
+  }
+  return {
+    purchases: Math.round((purchases + Number.EPSILON) * 100) / 100,
+    refunds: Math.round((refunds + Number.EPSILON) * 100) / 100,
+  };
+}
+
+function configForDate(state, date) {
+  const cycle = cycleForDate(state, date);
+  if (cycle?.cycleMonth && state.months?.[cycle.cycleMonth]) return { cfg: state.months[cycle.cycleMonth], cycle };
+  const month = date.slice(0, 7);
+  return { cfg: state.months?.[month] || null, cycle: null };
+}
+
+function applyMutation(state, action, payload = {}) {
+  const next = normalize(structuredClone(state || freshState()));
+  next.version = 3;
+  next.months ||= {};
+  next.dailySpending ||= {};
+  next.recurringExpenses ||= [];
+
+  if (action === 'saveMonth') {
+    const month = cleanText(payload.month, 7);
+    if (!MONTH_RE.test(month)) throw new Error('Invalid month.');
+    const tracking = cleanTracking(payload, month);
+    const allocation = cleanAllocation(payload);
+    const existing = next.months[month] || {};
+    const trackingStartDate = cleanText(payload.trackingStartDate, 10) || existing.trackingStartDate || `${month}-${String(tracking.trackingStartDay).padStart(2, '0')}`;
+    const conflictingEntry = Object.keys(next.dailySpending || {}).find((date) => {
+      if (existing.cycleStartDate && existing.cycleEndDate) return date >= existing.cycleStartDate && date < trackingStartDate;
+      return date.startsWith(`${month}-`) && Number(date.slice(-2)) < tracking.trackingStartDay;
+    });
+    if (conflictingEntry) throw new Error(`Tracking cannot start after an existing entry (${conflictingEntry}). Delete that entry or choose an earlier start date.`);
+    next.months[month] = {
+      ...existing,
+      income: finiteMoney(payload.income, 'Income'),
+      housing: finiteMoney(payload.housing, 'Housing'),
+      reinvestment: finiteMoney(payload.reinvestment, 'Reinvestment'),
+      ...allocation,
+      expenses: Array.isArray(payload.expenses) ? payload.expenses.map(cleanExpense) : [],
+      ...tracking,
+      trackingStartDate,
+      cycleStartDate: existing.cycleStartDate || cleanText(payload.cycleStartDate, 10) || trackingStartDate,
+      cycleEndDate: existing.cycleEndDate || cleanText(payload.cycleEndDate, 10) || null,
+      updatedAt: new Date().toISOString(),
+    };
+  } else if (action === 'saveDaily') {
+    const date = cleanText(payload.date, 10);
+    validateDateKey(date);
+    const { cfg, cycle } = configForDate(next, date);
+    if (!cfg) throw new Error('Set up the active financial cycle before logging daily spending.');
+    const trackingStartDate = cfg.trackingStartDate || cycle?.start || `${date.slice(0, 7)}-${String(cfg.trackingStartDay || 1).padStart(2, '0')}`;
+    if (date < trackingStartDate) throw new Error('That date is before this financial cycle’s tracking start date.');
+    const cleaned = cleanDailyEntry(payload);
+    const linked = linkedCardTotals(next, date);
+    if (cleaned.amount + 0.005 < linked.purchases) throw new Error(`This day already has ${linked.purchases.toFixed(2)} in card-linked purchases. The daily total cannot be lower than that.`);
+    if (cleaned.refund + 0.005 < linked.refunds) throw new Error(`This day already has ${linked.refunds.toFixed(2)} in card-linked refunds. The refund total cannot be lower than that.`);
+    next.dailySpending[date] = cleaned;
+  } else if (action === 'deleteDaily') {
+    const date = cleanText(payload.date, 10);
+    validateDateKey(date);
+    const linked = linkedCardTotals(next, date);
+    if (linked.purchases > 0 || linked.refunds > 0) throw new Error('This day has card-linked activity. Delete those card transactions from Cards first.');
+    delete next.dailySpending[date];
+  } else if (action === 'saveRecurring') {
+    if (!Array.isArray(payload.expenses)) throw new Error('Expenses must be a list.');
+    const cleaned = payload.expenses.map(cleanExpense);
+    const activeIds = new Set(cleaned.map((expense) => expense.id));
+    const timestamp = new Date().toISOString();
+    for (const [expenseId, meta] of Object.entries(next.recurringPaymentMeta || {})) {
+      if (meta?.active !== false && !activeIds.has(expenseId)) next.recurringPaymentMeta[expenseId] = { ...meta, active: false, endedAt: timestamp, updatedAt: timestamp };
+    }
+    next.recurringExpenses = cleaned;
+  } else if (action === 'deleteMonth') {
+    const month = cleanText(payload.month, 7);
+    if (!MONTH_RE.test(month)) throw new Error('Invalid month.');
+    delete next.months[month];
+    delete next.recurringPaymentSnapshots?.[month];
+    delete next.housingPaymentSnapshots?.[month];
+  } else if (action === 'importState') {
+    const imported = payload.state;
+    if (!imported || typeof imported !== 'object') throw new Error('Invalid backup file.');
+    const validated = freshState();
+    validated.createdAt = cleanText(imported.createdAt, 40) || validated.createdAt;
+    validated.recurringExpenses = Array.isArray(imported.recurringExpenses) ? imported.recurringExpenses.map(cleanExpense) : [];
+    for (const [month, cfg] of Object.entries(imported.months || {})) {
+      if (!MONTH_RE.test(month)) continue;
+      let tracking;
+      try { tracking = cleanTracking(cfg || {}, month); } catch { tracking = { trackingStartDay: 1, trackingStartMode: 'fresh', priorNetSpending: 0 }; }
+      let allocation;
+      try { allocation = cleanAllocation(cfg || {}); } catch { allocation = { savingsTarget: 0, planningWeeks: 4, payoutDaysPerWeek: 5 }; }
+      validated.months[month] = {
+        income: finiteMoney(cfg?.income, 'Income'),
+        housing: finiteMoney(cfg?.housing, 'Housing'),
+        reinvestment: finiteMoney(cfg?.reinvestment, 'Reinvestment'),
+        ...allocation,
+        expenses: Array.isArray(cfg?.expenses) ? cfg.expenses.map(cleanExpense) : [],
+        ...tracking,
+        trackingStartDate: cleanText(cfg?.trackingStartDate, 10) || null,
+        cycleStartDate: cleanText(cfg?.cycleStartDate, 10) || null,
+        cycleEndDate: cleanText(cfg?.cycleEndDate, 10) || null,
+        planRevisionId: cleanText(cfg?.planRevisionId, 100) || null,
+        inheritedPlan: cfg?.inheritedPlan === true,
+        updatedAt: cleanText(cfg?.updatedAt, 40) || new Date().toISOString(),
+      };
+    }
+    for (const [date, entry] of Object.entries(imported.dailySpending || {})) {
+      try { validateDateKey(date); } catch { continue; }
+      validated.dailySpending[date] = cleanDailyEntry(entry, true);
+    }
+    copyCardsForImport(imported, validated);
+    copySubscriptionsForImport(imported, validated);
+    copyPlanForImport(imported, validated);
+    validated.updatedAt = new Date().toISOString();
+    return validated;
+  } else {
+    throw new Error('Unknown action.');
+  }
+
+  next.updatedAt = new Date().toISOString();
+  return next;
+}
+
+async function readState(store) {
+  const entry = await store.getWithMetadata(STATE_KEY, { consistency: 'strong', type: 'json' });
+  if (!entry) return { state: freshState(), etag: null, exists: false };
+  return { state: normalize(entry.data), etag: entry.etag, exists: true };
+}
+
+async function mutate(store, action, payload) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const current = await readState(store);
+    const next = applyMutation(current.state, action, payload);
+    const options = current.exists ? { onlyIfMatch: current.etag } : { onlyIfNew: true };
+    const result = await store.setJSON(STATE_KEY, next, options);
+    if (result.modified) return { state: next, etag: result.etag };
+  }
+  throw new Error('Your data changed on another device. Please try again.');
+}
+
+export default async (request) => {
+  if (!isAuthenticated(request)) return json({ error: 'Unauthorized.' }, 401);
+  const store = getStore({ name: STORE_NAME, consistency: 'strong' });
+  const { pathname } = new URL(request.url);
+  try {
+    if (request.method === 'GET' && pathname.endsWith('/state')) {
+      const { state, etag } = await readState(store);
+      return json({ state, etag });
+    }
+    if (request.method === 'POST' && pathname.endsWith('/mutate')) {
+      let body;
+      try { body = await request.json(); } catch { return json({ error: 'Invalid JSON.' }, 400); }
+      return json(await mutate(store, body?.action, body?.payload || {}));
+    }
+  } catch (error) {
+    return json({ error: error?.message || 'Request failed.' }, 400);
+  }
+  return json({ error: 'Not found.' }, 404);
+};
+
+export const config = { path: '/api/budget/*' };
