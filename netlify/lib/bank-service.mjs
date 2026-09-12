@@ -201,6 +201,41 @@ export async function markConnectionRepairByItemId(itemId, code = 'ITEM_ERROR') 
   return true;
 }
 
+export async function clearRevokedItemData(itemId, code = 'USER_PERMISSION_REVOKED') {
+  const vault = await readVault();
+  const connection = connectionByItemId(vault, itemId);
+  if (!connection) return false;
+  const data = await readBankData(connection.connectionId);
+  await writeBankData(connection.connectionId, {
+    ...data,
+    cursor: null,
+    accounts: [],
+    transactions: [],
+    syncStatus: 'needs_repair',
+    errorCode: text(code, 80),
+    lastSyncedAt: new Date().toISOString(),
+  });
+  await markConnectionIssue(connection.connectionId, code);
+  await updateBudgetSubscriptionDiscovery(await readVault());
+  return true;
+}
+
+export async function removeRevokedAccountData(itemId, accountId) {
+  const vault = await readVault();
+  const connection = connectionByItemId(vault, itemId);
+  if (!connection) return false;
+  const data = await readBankData(connection.connectionId);
+  const accountRef = opaqueBankRef(accountId, 'account');
+  data.accounts = (data.accounts || []).filter((account) => account.accountRef !== accountRef);
+  data.transactions = (data.transactions || []).filter((row) => row.accountId !== accountId);
+  data.syncStatus = 'needs_repair';
+  data.errorCode = 'USER_ACCOUNT_REVOKED';
+  await writeBankData(connection.connectionId, data);
+  await markConnectionIssue(connection.connectionId, 'USER_ACCOUNT_REVOKED');
+  await updateBudgetSubscriptionDiscovery(await readVault());
+  return true;
+}
+
 export async function listPublicConnections() {
   const vault = await readVault();
   const results = [];
