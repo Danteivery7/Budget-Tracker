@@ -1,16 +1,19 @@
 import { isAuthenticated, json } from '../lib/auth.mjs';
 import { authorizeBankPassword, bankSessionCookie, bankSessionExpiresAt, clearBankSessionCookie, isBankAuthorized, requireSameOrigin, BANK_SESSION_MINUTES } from '../lib/bank-auth.mjs';
-import { bankEncryptionConfigured } from '../lib/bank-crypto.mjs';
+import { bankEncryptionConfigured, bankEncryptionStatus } from '../lib/bank-crypto.mjs';
 import { createPlaidLinkToken, disconnectConnection, exchangePublicToken, listPublicConnections, recentTransactions, syncConnection } from '../lib/bank-service.mjs';
 import { plaidConfigured, plaidEnvironment, plaidHistoryDays } from '../lib/plaid-client.mjs';
 
 function setupStatus() {
   let environment = null;
   try { environment = plaidEnvironment(); } catch { /* invalid config */ }
+  const encryption = bankEncryptionStatus();
   return {
-    configured: plaidConfigured() && bankEncryptionConfigured(),
+    configured: plaidConfigured() && bankEncryptionConfigured() && encryption.stableReferenceConfigured,
     plaidConfigured: plaidConfigured(),
     encryptionConfigured: bankEncryptionConfigured(),
+    stableReferenceConfigured: encryption.stableReferenceConfigured,
+    previousEncryptionKeyConfigured: encryption.previousConfigured,
     environment,
     historyDays: plaidHistoryDays(),
     bankSessionMinutes: BANK_SESSION_MINUTES,
@@ -50,7 +53,7 @@ export default async (request) => {
 
   if (!isBankAuthorized(request)) return json({ error: 'Banking session locked. Re-enter your access code.' }, 403);
   const setup = setupStatus();
-  if (!setup.configured && !pathname.endsWith('/status')) return json({ error: 'Secure banking is not configured on the server.' }, 503);
+  if (!setup.configured && !pathname.endsWith('/status')) return json({ error: 'Secure banking is not fully configured. Plaid credentials, AES encryption, and BANK_REFERENCE_KEY are required.' }, 503);
 
   try {
     if (request.method === 'GET' && pathname.endsWith('/status')) {

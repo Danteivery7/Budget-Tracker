@@ -2,105 +2,110 @@
 
 The application backend is designed for Cloudflare Pages Functions + D1. Netlify is not required.
 
-## 1. Create the Pages project
+## 1. Pages project
 
-Connect `Danteivery7/Budget-Tracker` to Cloudflare Pages.
+Use production branch `main`, build command `npm run build`, output directory `dist`, and Node.js 22. The generated `dist/_routes.json` sends only `/api/*` through Pages Functions.
 
-Use:
+## 2. D1
 
-- Production branch: `main`
-- Build command: `npm run build`
-- Build output directory: `dist`
-- Node.js: 22
+The production D1 database is named `budget-tracker` and is bound as `DB` through `wrangler.jsonc`. Cloudflare may therefore show dashboard binding controls as read-only. That is expected.
 
-The repository `functions/` directory provides the Pages Functions API. The generated `dist/_routes.json` limits Function invocations to `/api/*`, so normal static assets remain static requests.
+The runtime creates its required tables defensively on first use. The canonical schema is `migrations/0001_cloudflare_storage.sql`.
 
-## 2. Create and bind D1
+## 3. Secrets
 
-Create one D1 database named `budget-tracker` and bind it to the Pages project with the binding name:
+The normal tracker requires:
 
-`DB`
+- `BUDGET_TRACKER_PASSWORD`
 
-The production D1 binding is managed through `wrangler.jsonc`, so Cloudflare may show the dashboard binding controls as read-only. That is expected.
-
-The runtime creates its required tables defensively on first use. The canonical schema is also committed at:
-
-`migrations/0001_cloudflare_storage.sql`
-
-The D1 store preserves the optimistic/versioned writes previously used by the app, including the budget state, encrypted Plaid vault, encrypted bank cache, passkeys, intelligence rules, and tamper-evident ledger.
-
-## 3. Add encrypted secrets
-
-In Cloudflare Pages → Settings → Variables and Secrets, add `BUDGET_TRACKER_PASSWORD` as an encrypted secret.
-
-Plaid secrets can remain unset until banking commissioning begins. At that stage add these as encrypted secrets:
+Plaid commissioning additionally requires encrypted secrets:
 
 - `PLAID_CLIENT_ID`
 - `PLAID_SECRET`
-- `PLAID_TOKEN_ENCRYPTION_KEY`
+- `PLAID_TOKEN_ENCRYPTION_KEY` — fresh 32 random bytes encoded Base64
+- `BANK_REFERENCE_KEY` — a second, independent 32-byte Base64 key
 
-`PLAID_TOKEN_ENCRYPTION_KEY` must be a fresh 32-byte random value encoded as Base64. Do not commit it, paste it into the website, or send it through chat.
-
-A local example command for generating one is:
+Generate each random key locally, separately:
 
 ```bash
 node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"
 ```
 
-## 4. Add normal runtime variables for Plaid when ready
+`PLAID_TOKEN_ENCRYPTION_KEY` encrypts provider tokens, private bank cache, and financial-intelligence settings. `BANK_REFERENCE_KEY` only derives stable opaque account/transaction references and must not be rotated just because the data-encryption key rotates. This separation prevents a future AES key rotation from silently changing rule/reconciliation IDs.
 
-These can wait until Plaid Sandbox commissioning:
+Never commit these values or send them through chat.
 
-- `PLAID_ENV` = `sandbox` while testing, later `production`
-- `PLAID_TRANSACTION_HISTORY_DAYS` = `180`
-- `PLAID_REDIRECT_URI` = `https://YOUR_HOST/plaid-oauth.html`
-- `PLAID_WEBHOOK_URL` = `https://YOUR_HOST/api/plaid/webhook`
+### Encryption rotation only
 
-`SITE_ID` is already set to `budget-tracker-cloudflare` in `wrangler.jsonc` so cryptographic identity remains stable across deployments.
+During a planned rotation, temporarily add:
+
+- `PLAID_TOKEN_ENCRYPTION_KEY_PREVIOUS` = the old encryption key
+- `PLAID_TOKEN_ENCRYPTION_KEY` = the new encryption key
+
+Redeploy, unlock **System Health**, run **Re-encrypt previous-key records**, verify previous-key records reach zero, then remove `PLAID_TOKEN_ENCRYPTION_KEY_PREVIOUS` and redeploy. Do not change `BANK_REFERENCE_KEY` during normal encryption rotation.
+
+## 4. Plaid runtime variables
+
+These can wait until Sandbox commissioning:
+
+- `PLAID_ENV=sandbox` initially, later `production`
+- `PLAID_TRANSACTION_HISTORY_DAYS=180`
+- `PLAID_REDIRECT_URI=https://YOUR_HOST/plaid-oauth.html`
+- `PLAID_WEBHOOK_URL=https://YOUR_HOST/api/plaid/webhook`
+
+`SITE_ID=budget-tracker-cloudflare` is already fixed in `wrangler.jsonc`.
 
 ## 5. Passkeys
 
-If the permanent production hostname is the existing Cloudflare Pages hostname, no additional passkey environment variables are required. The WebAuthn backend derives the exact HTTPS origin and relying-party hostname from the production request, so a credential registered from that site is scoped to that hostname automatically.
+When the existing Pages hostname is permanent, no extra passkey variables are required. WebAuthn derives the exact HTTPS origin/RP hostname from the production request. Optional `PASSKEY_RP_ID` and `PASSKEY_ORIGIN` overrides remain supported for a future custom-domain migration.
 
-Optional `PASSKEY_RP_ID` and `PASSKEY_ORIGIN` overrides remain supported for a future custom-domain migration, but they are not required for the permanent Pages hostname.
-
-Register Face ID / Touch ID / Windows Hello passkeys from **Security & Audit** on the permanent production site. The UI shows the hostname the passkey will belong to and proposes a device-appropriate label that can be edited before registration.
-
-The password remains available as a recovery/fallback path. A registered passkey can also satisfy the separate 15-minute banking re-authentication.
+Register Face ID / Touch ID / Windows Hello from **Security & Audit**. The password remains the recovery fallback and registered passkeys can also satisfy the separate 15-minute banking re-authentication.
 
 ## 6. Automatic day rollover
 
-The production frontend watches the local calendar boundary. Just after local midnight it reloads the authoritative budget state so Today, fiscal-cycle calculations, daily allowance, and the date label advance without manual action. It also re-checks the date when the page is restored, focused, brought back from the background, or comes back online, covering phones and computers that were asleep at midnight.
+The frontend watches local midnight and reloads authoritative state just after the date changes. It also re-checks on page restore, focus, background return, and reconnect so sleeping devices cannot stay stuck on yesterday.
 
-## 7. Plaid
+## 7. System Health & commissioning
 
-Start with Plaid Sandbox. After the Pages deployment and final hostname are stable:
+The **System Health** workspace provides:
 
-1. Add the exact OAuth redirect URI in Plaid.
-2. Add the exact webhook URL in Plaid.
-3. Verify Sandbox linking and transaction sync.
-4. Change `PLAID_ENV` and credentials to Production only when ready to connect real institutions.
+- D1/auth/passkey/ledger/encryption/Plaid/classification health;
+- deterministic synthetic finance stress testing;
+- protected Plaid Sandbox commissioning controls;
+- browser-encrypted recovery export/import;
+- bank-encryption key-rotation status and execution.
 
-The Budget Tracker requests the Transactions product only. It does not request Auth/account-and-routing credentials, Identity, Transfer, ACH, or money-moving capabilities.
+Protected operations require the same separate 15-minute banking session used for private balances.
 
-## 8. Security model after migration
+Plaid Sandbox controls remain disabled until all Sandbox credentials, AES encryption, and `BANK_REFERENCE_KEY` are configured. They are unavailable when `PLAID_ENV=production`.
 
-- Static frontend assets are built into `dist`; server modules are not published as static files.
-- API requests execute in Cloudflare Pages Functions.
-- Persistent application state uses Cloudflare D1.
-- Plaid access tokens and raw bank cache remain AES-256-GCM encrypted at the application layer before D1 storage.
-- API rate limiting uses D1 and stores only a keyed hash of the connecting IP, never the raw IP.
-- API responses are `no-store` and receive security headers directly from the Pages Function.
-- Static responses use the committed `_headers` policy.
-- Financial ledger entries remain append-only/tamper-evident with hash-chain verification.
+## 8. Recovery
 
-## 9. Local verification
+System Health exports the logical D1 application records and encrypts the recovery file in the browser with a user-supplied passphrase using PBKDF2-SHA256 + AES-256-GCM. The recovery passphrase never reaches the server.
+
+The package deliberately does not contain Cloudflare/Plaid secrets or the bank-encryption key. Store those separately in a secure secrets/password manager.
+
+Cloudflare D1 Time Travel remains the second recovery layer for point-in-time database rollback. The application recovery import is merge/upsert based, which is safer for portable disaster recovery; use D1 Time Travel for destructive rollback to an exact earlier database state.
+
+## 9. Plaid commissioning
+
+Start with Sandbox. System Health can create a dynamic Transactions Sandbox Item using Plaid's supported Link-bypass test endpoint, sync through the encrypted production code path, seed custom Sandbox activity, and fire a `SYNC_UPDATES_AVAILABLE` webhook. The browser never receives Plaid access tokens/provider IDs.
+
+Do not switch to Production until the synthetic suite and Sandbox flow are green and Review Inbox/subscription behavior has been inspected.
+
+The integration requests Transactions only. It does not request Plaid Auth/account-and-routing credentials, Identity, Transfer, ACH, or money-moving capabilities.
+
+## 10. Real-money activation gate
+
+Raw bank transactions still do not automatically mutate daily discretionary spending. Keep the first real connection read-only, observe classifications, recurring charges, card settlements, internal transfers, and refunds, then enable a future idempotent economic-impact pipeline only after the data is proven.
+
+See `PRE_MONEY_COMMISSIONING.md` for the complete gate plan and the data-dependent features intentionally deferred until real history exists.
+
+## 11. Verification
 
 ```bash
 npm install
 npm run verify
 ```
 
-`npm run verify` runs all existing tests, syntax checks, the static build, and a real Cloudflare Pages Functions bundle with Wrangler.
-
-For local Pages execution, create `.dev.vars` for local-only secrets and never commit it. Then bind a local/remote D1 database named `DB` and run Wrangler Pages development.
+`npm run verify` runs finance/security tests, the pre-money stress fixture, syntax checks, the static build, and a real Cloudflare Pages Functions bundle with Wrangler.
