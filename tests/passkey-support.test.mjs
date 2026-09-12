@@ -18,8 +18,11 @@ test('signed WebAuthn challenge cookie is purpose-bound and tamper resistant', (
   const request = new Request('https://budget.example/api/passkeys/authentication/verify', { headers:{ cookie } });
   assert.equal(challengeFromRequest(request, 'login'), 'challenge-123');
   assert.equal(challengeFromRequest(request, 'bank'), null);
-  const tampered = cookie.replace('challenge', 'changed');
-  const badRequest = new Request('https://budget.example/api/passkeys/authentication/verify', { headers:{ cookie:tampered } });
+  const splitAt = cookie.indexOf('=');
+  const name = cookie.slice(0, splitAt);
+  const token = decodeURIComponent(cookie.slice(splitAt + 1));
+  const tamperedToken = `${token.slice(0, -1)}${token.endsWith('A') ? 'B' : 'A'}`;
+  const badRequest = new Request('https://budget.example/api/passkeys/authentication/verify', { headers:{ cookie:`${name}=${encodeURIComponent(tamperedToken)}` } });
   assert.equal(challengeFromRequest(badRequest, 'login'), null);
 });
 
