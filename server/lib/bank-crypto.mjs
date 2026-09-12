@@ -17,10 +17,18 @@ function previousKey() {
   return decodeKey('PLAID_TOKEN_ENCRYPTION_KEY_PREVIOUS');
 }
 
+function referenceKey() {
+  // A dedicated reference key keeps opaque account/transaction IDs stable when
+  // the AES data-encryption key rotates. The current encryption key remains a
+  // backwards-compatible fallback until BANK_REFERENCE_KEY is configured.
+  return decodeKey('BANK_REFERENCE_KEY') || currentKey();
+}
+
 export function bankEncryptionStatus() {
   return {
     currentConfigured: Boolean(decodeKey('PLAID_TOKEN_ENCRYPTION_KEY')),
     previousConfigured: Boolean(previousKey()),
+    stableReferenceConfigured: Boolean(decodeKey('BANK_REFERENCE_KEY')),
   };
 }
 
@@ -81,7 +89,7 @@ export function decryptBankValue(envelope, purpose = 'bank-data', parseJson = tr
 }
 
 export function opaqueBankRef(value, namespace = 'ref') {
-  const key = currentKey();
+  const key = referenceKey();
   return createHmac('sha256', key).update(`${namespace}:${String(value || '')}`).digest('base64url').slice(0, 24);
 }
 
