@@ -1,15 +1,21 @@
 {
   "name": "budget-tracker",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "private": true,
   "type": "module",
   "scripts": {
+    "build": "node scripts/build-static.mjs",
     "test": "node --test",
-    "check": "node --check app.js && node --check refunds.js && node --check start.js && node --check allocations.js && node --check cards.js && node --check engine.js && node --check financial-cycle.js && node --check fiscal-runtime.js && node --check purchase-engine.js && node --check purchase-planner.js && node --check setup-engine.js && node --check setup-wizard.js && node --check ui-polish.js && node --check subscription-engine.js && node --check subscriptions.js && node --check plan-bootstrap.js && node --check plan-change.js && node --check banking.js && node --check plaid-oauth.js && node --check financial-intelligence.js && node --check passkey-client.js && node --check passkey-login.js && node --check ledger-client.js && node --check bank-passkey-enhancement.js && node --check intelligence.js && node --check security-center.js && node --check netlify/functions/auth.mjs && node --check netlify/functions/budget.mjs && node --check netlify/functions/cards.mjs && node --check netlify/functions/subscriptions.mjs && node --check netlify/functions/plan.mjs && node --check netlify/functions/bank.mjs && node --check netlify/functions/plaid-webhook.mjs && node --check netlify/functions/passkeys.mjs && node --check netlify/functions/ledger.mjs && node --check netlify/functions/intelligence.mjs && node --check netlify/lib/auth.mjs && node --check netlify/lib/cards-core.mjs && node --check netlify/lib/subscriptions-core.mjs && node --check netlify/lib/plan-core.mjs && node --check netlify/lib/bank-auth.mjs && node --check netlify/lib/bank-core.mjs && node --check netlify/lib/bank-crypto.mjs && node --check netlify/lib/bank-store.mjs && node --check netlify/lib/bank-service.mjs && node --check netlify/lib/plaid-client.mjs && node --check netlify/lib/plaid-webhook.mjs && node --check netlify/lib/passkeys.mjs && node --check netlify/lib/ledger.mjs && node --check netlify/lib/intelligence-store.mjs && node --check netlify/lib/intelligence-service.mjs && node --check sw.js"
+    "check": "node --check app.js && node --check refunds.js && node --check start.js && node --check allocations.js && node --check cards.js && node --check engine.js && node --check financial-cycle.js && node --check fiscal-runtime.js && node --check purchase-engine.js && node --check purchase-planner.js && node --check setup-engine.js && node --check setup-wizard.js && node --check ui-polish.js && node --check subscription-engine.js && node --check subscriptions.js && node --check plan-bootstrap.js && node --check plan-change.js && node --check banking.js && node --check plaid-oauth.js && node --check financial-intelligence.js && node --check passkey-client.js && node --check passkey-login.js && node --check ledger-client.js && node --check bank-passkey-enhancement.js && node --check intelligence.js && node --check security-center.js && node --check 'functions/api/[[path]].js' && node --check server/functions/auth.mjs && node --check server/functions/budget.mjs && node --check server/functions/cards.mjs && node --check server/functions/subscriptions.mjs && node --check server/functions/plan.mjs && node --check server/functions/bank.mjs && node --check server/functions/plaid-webhook.mjs && node --check server/functions/passkeys.mjs && node --check server/functions/ledger.mjs && node --check server/functions/intelligence.mjs && node --check server/lib/auth.mjs && node --check server/lib/cards-core.mjs && node --check server/lib/subscriptions-core.mjs && node --check server/lib/plan-core.mjs && node --check server/lib/bank-auth.mjs && node --check server/lib/bank-core.mjs && node --check server/lib/bank-crypto.mjs && node --check server/lib/bank-store.mjs && node --check server/lib/bank-service.mjs && node --check server/lib/plaid-client.mjs && node --check server/lib/plaid-webhook.mjs && node --check server/lib/passkeys.mjs && node --check server/lib/ledger.mjs && node --check server/lib/intelligence-store.mjs && node --check server/lib/intelligence-service.mjs && node --check server/lib/rate-limit.mjs && node --check scripts/build-static.mjs && node --check sw.js",
+    "cloudflare:bundle": "npm run build && wrangler pages functions build functions --outfile=.cloudflare/worker.js --build-output-directory=dist",
+    "verify": "npm test && npm run check && npm run cloudflare:bundle"
   },
   "dependencies": {
-    "@netlify/blobs": "10.7.13",
+    "@netlify/blobs": "file:./server/cloudflare-blobs-compat",
     "@simplewebauthn/server": "14.0.1",
     "jose": "6.2.12"
+  },
+  "devDependencies": {
+    "wrangler": "4.131.1"
   }
 }
