@@ -18,7 +18,9 @@ jobs:
           node-version: '22'
       - name: Install dependencies
         run: npm install
-      - name: Run budget math tests
+      - name: Run budget and security tests
         run: npm test
       - name: Run syntax checks
         run: npm run check
+      - name: Build Cloudflare Pages assets and Functions
+        run: npm run cloudflare:bundle
