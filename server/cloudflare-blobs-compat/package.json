@@ -1,0 +1,7 @@
+{
+  "name": "@netlify/blobs",
+  "version": "0.0.0-cloudflare-d1",
+  "private": true,
+  "type": "module",
+  "exports": "./index.mjs"
+}
