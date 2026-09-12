@@ -1,34 +1,47 @@
-import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import { comparePassword, isAuthenticated, parseCookies } from './auth.mjs';
 
 const BANK_COOKIE = 'budget_tracker_bank_session';
 const BANK_SESSION_SECONDS = 15 * 60;
 
-function hash(value) {
-  return createHash('sha256').update(String(value)).digest();
-}
-
-function bankSessionToken() {
+function secret() {
   const password = process.env.BUDGET_TRACKER_PASSWORD || '';
   const site = process.env.SITE_ID || process.env.URL || 'budget-tracker';
-  return createHmac('sha256', password).update(`budget-tracker-bank-session-v1:${site}`).digest('hex');
+  return createHmac('sha256', password).update(`budget-tracker-bank-session-key-v2:${site}`).digest();
 }
 
-export function bankSessionCookie() {
-  return `${BANK_COOKIE}=${encodeURIComponent(bankSessionToken())}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${BANK_SESSION_SECONDS}`;
+function signature(issuedAt) {
+  return createHmac('sha256', secret()).update(`bank-session:${issuedAt}`).digest('base64url');
+}
+
+export function createBankSessionToken(now = Date.now()) {
+  const issuedAt = Math.floor(now / 1000);
+  return `${issuedAt}.${signature(issuedAt)}`;
+}
+
+export function validateBankSessionToken(token, now = Date.now()) {
+  const [issuedText, supplied] = String(token || '').split('.');
+  const issuedAt = Number(issuedText);
+  if (!Number.isInteger(issuedAt) || !supplied) return false;
+  const age = Math.floor(now / 1000) - issuedAt;
+  if (age < -60 || age > BANK_SESSION_SECONDS) return false;
+  const expected = signature(issuedAt);
+  const left = Buffer.from(supplied);
+  const right = Buffer.from(expected);
+  return left.length === right.length && timingSafeEqual(left, right);
+}
+
+export function bankSessionCookie(now = Date.now()) {
+  return `${BANK_COOKIE}=${encodeURIComponent(createBankSessionToken(now))}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${BANK_SESSION_SECONDS}`;
 }
 
 export function clearBankSessionCookie() {
   return `${BANK_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0`;
 }
 
-export function isBankAuthorized(request) {
+export function isBankAuthorized(request, now = Date.now()) {
   if (!isAuthenticated(request)) return false;
-  const token = parseCookies(request)[BANK_COOKIE];
-  if (!token) return false;
-  const a = hash(token);
-  const b = hash(bankSessionToken());
-  return a.length === b.length && timingSafeEqual(a, b);
+  return validateBankSessionToken(parseCookies(request)[BANK_COOKIE], now);
 }
 
 export function authorizeBankPassword(input) {
