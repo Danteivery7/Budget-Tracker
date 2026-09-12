@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
+import { anchorDateForMonth, financialCycleBounds, financialCycleBoundsForMonth } from '../../financial-cycle.js';
 
 const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+const DATE_RE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
 const roundMoney = (value) => Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
 const text = (value, max = 160) => String(value ?? '').trim().slice(0, max);
 
@@ -47,9 +49,31 @@ function validateAllocation(config) {
   return personal;
 }
 
+function dateFromMonthDay(month, day) {
+  const [year, monthNumber] = month.split('-').map(Number);
+  return anchorDateForMonth(year, monthNumber, day);
+}
+
+function establishCycleAnchor(state, month) {
+  ensurePlanShape(state);
+  if (DATE_RE.test(state.planSettings.financialCycleAnchorDate || '')) return state.planSettings.financialCycleAnchorDate;
+  const config = state.months?.[month] || {};
+  const startDay = Math.max(1, Number(config.trackingStartDay || 1));
+  const anchorDate = dateFromMonthDay(month, startDay);
+  state.planSettings.financialCycleAnchorDate = anchorDate;
+  state.planSettings.financialCycleAnchorDay = Number(anchorDate.slice(-2));
+  state.planSettings.weekStartsOn = 1;
+  state.planSettings.updatedAt = new Date().toISOString();
+  return anchorDate;
+}
+
 export function ensurePlanShape(state = {}) {
   state.planRevisions = Array.isArray(state.planRevisions) ? state.planRevisions : [];
   state.planSettings = state.planSettings && typeof state.planSettings === 'object' && !Array.isArray(state.planSettings) ? state.planSettings : {};
+  state.planSettings.weekStartsOn = 1;
+  if (DATE_RE.test(state.planSettings.financialCycleAnchorDate || '')) {
+    state.planSettings.financialCycleAnchorDay = Number(state.planSettings.financialCycleAnchorDate.slice(-2));
+  }
   return state;
 }
 
@@ -58,10 +82,11 @@ export function initializePlanFromMonth(state, month, now = new Date()) {
   if (state.planRevisions.length || !state.months?.[month]) return state;
   const config = configFrom(state.months[month], state.recurringExpenses || state.months[month].expenses || []);
   validateAllocation(config);
+  const anchorDate = establishCycleAnchor(state, month);
   state.planRevisions.push({
     id: randomUUID(),
     effectiveMonth: month,
-    effectiveDate: `${month}-01`,
+    effectiveDate: anchorDate,
     source: 'initial-setup',
     reason: 'Initial budget plan',
     config,
@@ -69,6 +94,12 @@ export function initializePlanFromMonth(state, month, now = new Date()) {
     balanceMode: 'protected',
     createdAt: now.toISOString(),
   });
+  const bounds = financialCycleBoundsForMonth(month, anchorDate);
+  if (bounds) {
+    state.months[month].cycleStartDate = bounds.start;
+    state.months[month].cycleEndDate = bounds.end;
+    state.months[month].trackingStartDate = state.months[month].trackingStartDate || anchorDate;
+  }
   state.planSettings.activeRevisionId = state.planRevisions[0].id;
   state.planSettings.updatedAt = now.toISOString();
   return state;
@@ -76,10 +107,19 @@ export function initializePlanFromMonth(state, month, now = new Date()) {
 
 export function bootstrapPlanFromHistory(state, now = new Date()) {
   ensurePlanShape(state);
-  if (state.planRevisions.length) return state;
+  if (state.planRevisions.length) {
+    if (!DATE_RE.test(state.planSettings.financialCycleAnchorDate || '')) {
+      const first = [...state.planRevisions].sort((a, b) => String(a.effectiveDate || '').localeCompare(String(b.effectiveDate || '')))[0];
+      if (DATE_RE.test(first?.effectiveDate || '')) {
+        state.planSettings.financialCycleAnchorDate = first.effectiveDate;
+        state.planSettings.financialCycleAnchorDay = Number(first.effectiveDate.slice(-2));
+      }
+    }
+    return state;
+  }
   const keys = Object.keys(state.months || {}).sort();
   if (!keys.length) return state;
-  return initializePlanFromMonth(state, keys.at(-1), now);
+  return initializePlanFromMonth(state, keys[0], now);
 }
 
 export function resolvePlanForMonth(state, month) {
@@ -90,11 +130,26 @@ export function resolvePlanForMonth(state, month) {
   return eligible.at(-1) || null;
 }
 
+export function cycleForDate(state, date) {
+  bootstrapPlanFromHistory(state);
+  const anchorDate = state.planSettings.financialCycleAnchorDate;
+  if (!DATE_RE.test(anchorDate || '')) return null;
+  return financialCycleBounds(date, anchorDate);
+}
+
 export function ensureMonthFromPlan(state, month, now = new Date()) {
   ensurePlanShape(state);
   if (!MONTH_RE.test(month)) throw new Error('Invalid month.');
-  if (state.months?.[month]) return state;
   bootstrapPlanFromHistory(state, now);
+  const anchorDate = state.planSettings.financialCycleAnchorDate || `${month}-01`;
+  const bounds = financialCycleBoundsForMonth(month, anchorDate);
+  if (!bounds) return state;
+  if (state.months?.[month]) {
+    state.months[month].cycleStartDate ||= bounds.start;
+    state.months[month].cycleEndDate ||= bounds.end;
+    state.months[month].trackingStartDate ||= state.months[month].cycleStartDate;
+    return state;
+  }
   const revision = resolvePlanForMonth(state, month);
   if (!revision) return state;
   state.months ||= {};
@@ -104,7 +159,10 @@ export function ensureMonthFromPlan(state, month, now = new Date()) {
   validateAllocation(config);
   state.months[month] = {
     ...config,
-    trackingStartDay: 1,
+    cycleStartDate: bounds.start,
+    cycleEndDate: bounds.end,
+    trackingStartDate: bounds.start,
+    trackingStartDay: Number(bounds.start.slice(-2)),
     trackingStartMode: 'fresh',
     priorNetSpending: 0,
     planRevisionId: revision.id,
@@ -116,11 +174,18 @@ export function ensureMonthFromPlan(state, month, now = new Date()) {
   return state;
 }
 
+export function ensureCycleForDate(state, date, now = new Date()) {
+  bootstrapPlanFromHistory(state, now);
+  const bounds = cycleForDate(state, date);
+  if (!bounds) return state;
+  return ensureMonthFromPlan(state, bounds.cycleMonth, now);
+}
+
 export function createPlanRevision(state, payload = {}, now = new Date()) {
   ensurePlanShape(state);
   bootstrapPlanFromHistory(state, now);
   const effectiveMonth = text(payload?.effectiveMonth, 7);
-  if (!MONTH_RE.test(effectiveMonth)) throw new Error('Choose a valid effective month.');
+  if (!MONTH_RE.test(effectiveMonth)) throw new Error('Choose a valid effective financial cycle.');
 
   const baseRevision = resolvePlanForMonth(state, effectiveMonth) || state.planRevisions.at(-1);
   const baseConfig = baseRevision?.config || {};
@@ -138,10 +203,12 @@ export function createPlanRevision(state, payload = {}, now = new Date()) {
     config.reinvestment = Math.max(0, flexibleBusiness);
   }
   const personal = validateAllocation(config);
+  const anchorDate = state.planSettings.financialCycleAnchorDate || `${effectiveMonth}-01`;
+  const bounds = financialCycleBoundsForMonth(effectiveMonth, anchorDate);
   const revision = {
     id: randomUUID(),
     effectiveMonth,
-    effectiveDate: text(payload?.effectiveDate, 10) || `${effectiveMonth}-01`,
+    effectiveDate: text(payload?.effectiveDate, 10) || bounds?.start || `${effectiveMonth}-01`,
     source: 'plan-change-wizard',
     reason: text(payload?.reason, 200) || 'Plan updated',
     previousRevisionId: baseRevision?.id || null,
@@ -161,7 +228,10 @@ export function createPlanRevision(state, payload = {}, now = new Date()) {
       ...existing,
       ...config,
       expenses: cleanExpenses(existing.expenses?.length ? existing.expenses : config.expenses),
-      trackingStartDay: Number(existing.trackingStartDay || 1),
+      cycleStartDate: existing.cycleStartDate || bounds?.start,
+      cycleEndDate: existing.cycleEndDate || bounds?.end,
+      trackingStartDate: existing.trackingStartDate || existing.cycleStartDate || bounds?.start,
+      trackingStartDay: Number(existing.trackingStartDay || bounds?.start?.slice(-2) || 1),
       trackingStartMode: existing.trackingStartMode === 'actual' ? 'actual' : 'fresh',
       priorNetSpending: Number(existing.priorNetSpending || 0),
       planRevisionId: revision.id,
@@ -189,6 +259,6 @@ export function copyPlanForImport(source, target) {
     balanceMode: revision.balanceMode === 'personal' ? 'personal' : 'protected',
     createdAt: text(revision.createdAt, 40) || new Date().toISOString(),
   }));
-  target.planSettings = { ...input.planSettings };
+  target.planSettings = { ...input.planSettings, weekStartsOn: 1 };
   return target;
 }
