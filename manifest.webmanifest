@@ -3,9 +3,9 @@
   "short_name": "Budget",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#0a1020",
-  "theme_color": "#0a1020",
-  "description": "Private daily spending and monthly budget tracker.",
+  "background_color": "#09090a",
+  "theme_color": "#09090a",
+  "description": "Private financial planning, spending, and allocation console.",
   "icons": [
     {
       "src": "/icon.svg",
