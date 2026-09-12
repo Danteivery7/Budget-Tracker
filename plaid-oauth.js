@@ -1,5 +1,6 @@
 const status = document.querySelector('#oauthStatus');
 const button = document.querySelector('#oauthReturn');
+const OAUTH_RESUME_MAX_MS = 15 * 60 * 1000;
 
 function finish(message, error = false) {
   status.textContent = message;
@@ -27,6 +28,12 @@ button.addEventListener('click', returnHome);
 
 let saved = null;
 try { saved = JSON.parse(sessionStorage.getItem('budget_plaid_oauth') || 'null'); } catch { /* noop */ }
+const createdAt = Number(saved?.createdAt || 0);
+if (!Number.isFinite(createdAt) || createdAt <= 0 || Date.now() - createdAt > OAUTH_RESUME_MAX_MS) {
+  sessionStorage.removeItem('budget_plaid_oauth');
+  saved = null;
+}
+
 if (!saved?.linkToken || !window.Plaid?.create) {
   finish('The secure connection session could not be resumed. Return to Budget Tracker and start the bank connection again.', true);
 } else {
@@ -44,12 +51,14 @@ if (!saved?.linkToken || !window.Plaid?.create) {
         status.textContent = 'Connection complete. Returning to Budget Tracker…';
         setTimeout(returnHome, 250);
       } catch (error) {
+        sessionStorage.removeItem('budget_plaid_oauth');
         finish(error.message, true);
       } finally {
         handler.destroy?.();
       }
     },
     onExit: (error) => {
+      sessionStorage.removeItem('budget_plaid_oauth');
       if (error) finish('The bank connection could not be completed. Return to Budget Tracker and try again.', true);
       else finish('The bank connection flow was closed.', false);
       handler.destroy?.();
