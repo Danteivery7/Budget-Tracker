@@ -1,3 +1,5 @@
+import { cycleDayNumber, dateInRange, daysInclusive, financialCycleBounds, financialCycleBoundsForMonth } from './financial-cycle.js';
+
 export const DEFAULT_STATE = {
   version: 3,
   createdAt: null,
@@ -101,6 +103,24 @@ export function allocationBreakdown(cfg = {}, carryIn = 0) {
   };
 }
 
+function anchorDate(data = {}) {
+  const value = String(data?.planSettings?.financialCycleAnchorDate || '');
+  return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : null;
+}
+
+export function cycleBoundsForMonth(data, monthKey) {
+  const anchor = anchorDate(data);
+  if (anchor) return financialCycleBoundsForMonth(monthKey, anchor);
+  return { start: `${monthKey}-01`, end: `${monthKey}-${String(daysInMonth(monthKey)).padStart(2, '0')}`, nextStart: `${nextMonthKey(monthKey)}-01`, cycleMonth: monthKey, anchorDay: 1 };
+}
+
+export function cycleBoundsForDate(data, dateKey) {
+  const anchor = anchorDate(data);
+  if (anchor) return financialCycleBounds(dateKey, anchor);
+  const monthKey = dateKey.slice(0, 7);
+  return cycleBoundsForMonth(data, monthKey);
+}
+
 export function trackingSettings(cfg = {}, monthKey, spendable = 0) {
   const dim = daysInMonth(monthKey);
   const parsedDay = Number(cfg?.trackingStartDay || 1);
@@ -114,6 +134,42 @@ export function trackingSettings(cfg = {}, monthKey, spendable = 0) {
       ? priorNetSpending
       : roundMoney(baseExact * (startDay - 1));
   return { startDay, startMode, priorNetSpending, openingAdjustment };
+}
+
+function cycleTrackingSettings(cfg = {}, bounds, spendable = 0) {
+  const dim = daysInclusive(bounds.start, bounds.end);
+  let startDate = String(cfg?.trackingStartDate || '');
+  if (!dateInRange(startDate, bounds.start, bounds.end)) {
+    const legacyDay = Number(cfg?.trackingStartDay || 0);
+    const legacyDate = legacyDay > 0 ? `${bounds.cycleMonth}-${String(legacyDay).padStart(2, '0')}` : '';
+    startDate = dateInRange(legacyDate, bounds.start, bounds.end) ? legacyDate : bounds.start;
+  }
+  const startIndex = daysInclusive(bounds.start, startDate);
+  const startMode = cfg?.trackingStartMode === 'actual' ? 'actual' : 'fresh';
+  const priorNetSpending = roundMoney(Number(cfg?.priorNetSpending || 0));
+  const baseExact = Number(spendable || 0) / Math.max(1, dim);
+  const openingAdjustment = startIndex <= 1
+    ? 0
+    : startMode === 'actual'
+      ? priorNetSpending
+      : roundMoney(baseExact * (startIndex - 1));
+  return { startDate, startIndex, startMode, priorNetSpending, openingAdjustment };
+}
+
+function trackedEntryTotalsRange(data, startDate, endDate) {
+  let grossSpent = 0;
+  let refunds = 0;
+  for (const [date, entry] of Object.entries(data.dailySpending || {})) {
+    if (!dateInRange(date, startDate, endDate)) continue;
+    const amounts = dailyAmounts(entry);
+    grossSpent += amounts.spent;
+    refunds += amounts.refunded;
+  }
+  return {
+    grossSpent: roundMoney(grossSpent),
+    refunds: roundMoney(refunds),
+    netSpent: roundMoney(grossSpent - refunds),
+  };
 }
 
 function trackedEntryTotals(data, monthKey, startDay = 1) {
@@ -137,11 +193,14 @@ export function calculateCarryInto(data, targetMonthKey) {
   let carry = 0;
   for (const key of keys) {
     const cfg = data.months[key];
+    const bounds = cfg?.cycleStartDate && cfg?.cycleEndDate
+      ? { start: cfg.cycleStartDate, end: cfg.cycleEndDate, cycleMonth: key }
+      : cycleBoundsForMonth(data, key);
+    if (!bounds) continue;
     const allocation = allocationBreakdown(cfg, carry);
-    const spendable = allocation.spendable;
-    const tracking = trackingSettings(cfg, key, spendable);
-    const totals = trackedEntryTotals(data, key, tracking.startDay);
-    carry = roundMoney(spendable - tracking.openingAdjustment - totals.netSpent);
+    const tracking = cycleTrackingSettings(cfg, bounds, allocation.spendable);
+    const totals = trackedEntryTotalsRange(data, tracking.startDate, bounds.end);
+    carry = roundMoney(allocation.spendable - tracking.openingAdjustment - totals.netSpent);
   }
   return roundMoney(carry);
 }
@@ -175,26 +234,31 @@ export function dailyStatus(availableBefore, netSpent, afterBalance) {
 }
 
 export function calculateDay(data, dateKey) {
-  const monthKey = dateKey.slice(0, 7);
+  const bounds = cycleBoundsForDate(data, dateKey);
+  if (!bounds) return null;
+  const monthKey = bounds.cycleMonth;
   const cfg = data.months?.[monthKey];
   if (!cfg) return null;
 
-  const day = getDayNumber(dateKey);
-  const dim = daysInMonth(monthKey);
+  const day = cycleDayNumber(dateKey, bounds);
+  const dim = daysInclusive(bounds.start, bounds.end);
   if (day < 1 || day > dim) return null;
 
   const carryIn = calculateCarryInto(data, monthKey);
   const allocation = allocationBreakdown(cfg, carryIn);
   const { recurringTotal, fixedTotal, spendable } = allocation;
-  const baseExact = spendable / dim;
+  const baseExact = spendable / Math.max(1, dim);
   const baseDaily = roundMoney(baseExact);
-  const tracking = trackingSettings(cfg, monthKey, spendable);
+  const tracking = cycleTrackingSettings(cfg, bounds, spendable);
 
-  if (day < tracking.startDay) {
+  if (dateKey < tracking.startDate) {
     return {
       monthKey,
+      cycleStartDate: bounds.start,
+      cycleEndDate: bounds.end,
       day,
       daysInMonth: dim,
+      daysInCycle: dim,
       carryIn,
       recurringTotal,
       fixedTotal,
@@ -202,7 +266,8 @@ export function calculateDay(data, dateKey) {
       spendable,
       baseDaily,
       trackingStarted: false,
-      trackingStartDay: tracking.startDay,
+      trackingStartDay: tracking.startIndex,
+      trackingStartDate: tracking.startDate,
       trackingStartMode: tracking.startMode,
       openingAdjustment: tracking.openingAdjustment,
       beforeSpend: tracking.openingAdjustment,
@@ -219,21 +284,27 @@ export function calculateDay(data, dateKey) {
     };
   }
 
-  const trackedBefore = spendBeforeDay(data, monthKey, day, tracking.startDay);
+  const dayBefore = new Date(`${dateKey}T12:00:00Z`);
+  dayBefore.setUTCDate(dayBefore.getUTCDate() - 1);
+  const dayBeforeKey = dayBefore.toISOString().slice(0, 10);
+  const trackedBefore = dayBeforeKey >= tracking.startDate ? trackedEntryTotalsRange(data, tracking.startDate, dayBeforeKey).netSpent : 0;
   const beforeSpend = roundMoney(tracking.openingAdjustment + trackedBefore);
   const availableBefore = roundMoney(baseExact * day - beforeSpend);
   const amounts = dailyAmounts(data.dailySpending?.[dateKey]);
   const afterBalance = roundMoney(availableBefore - amounts.net);
   const recoveryDays = baseExact > 0 && afterBalance < 0 ? Math.ceil(Math.abs(afterBalance) / baseExact) : 0;
-  const trackedThrough = spendThroughDay(data, monthKey, day, tracking.startDay);
-  const tomorrowRaw = day < dim
+  const trackedThrough = trackedEntryTotalsRange(data, tracking.startDate, dateKey).netSpent;
+  const tomorrowRaw = dateKey < bounds.end
     ? roundMoney(baseExact * (day + 1) - tracking.openingAdjustment - trackedThrough)
     : null;
 
   return {
     monthKey,
+    cycleStartDate: bounds.start,
+    cycleEndDate: bounds.end,
     day,
     daysInMonth: dim,
+    daysInCycle: dim,
     carryIn,
     recurringTotal,
     fixedTotal,
@@ -241,7 +312,8 @@ export function calculateDay(data, dateKey) {
     spendable,
     baseDaily,
     trackingStarted: true,
-    trackingStartDay: tracking.startDay,
+    trackingStartDay: tracking.startIndex,
+    trackingStartDate: tracking.startDate,
     trackingStartMode: tracking.startMode,
     openingAdjustment: tracking.openingAdjustment,
     beforeSpend,
@@ -261,12 +333,17 @@ export function calculateDay(data, dateKey) {
 export function calculateMonth(data, monthKey) {
   const cfg = data.months?.[monthKey];
   const carryIn = calculateCarryInto(data, monthKey);
-  const dim = daysInMonth(monthKey);
+  const bounds = cfg?.cycleStartDate && cfg?.cycleEndDate
+    ? { start: cfg.cycleStartDate, end: cfg.cycleEndDate, cycleMonth: monthKey }
+    : cycleBoundsForMonth(data, monthKey);
+  const dim = bounds ? daysInclusive(bounds.start, bounds.end) : daysInMonth(monthKey);
   if (!cfg) {
     const totals = trackedEntryTotals(data, monthKey, 1);
     return {
       configured: false,
       monthKey,
+      cycleStartDate: bounds?.start || `${monthKey}-01`,
+      cycleEndDate: bounds?.end || `${monthKey}-${String(daysInMonth(monthKey)).padStart(2, '0')}`,
       carryIn,
       income: 0,
       housing: 0,
@@ -284,6 +361,7 @@ export function calculateMonth(data, monthKey) {
       endingCarry: roundMoney(carryIn - totals.netSpent),
       baseDaily: 0,
       daysInMonth: dim,
+      daysInCycle: dim,
       trackingStartDay: 1,
       trackingStartMode: 'fresh',
       allocation: allocationBreakdown({}, carryIn),
@@ -292,13 +370,15 @@ export function calculateMonth(data, monthKey) {
 
   const allocation = allocationBreakdown(cfg, carryIn);
   const { recurringTotal, housing, fixedTotal, income, reinvestment, savingsTarget, spendable } = allocation;
-  const tracking = trackingSettings(cfg, monthKey, spendable);
-  const totals = trackedEntryTotals(data, monthKey, tracking.startDay);
+  const tracking = cycleTrackingSettings(cfg, bounds, spendable);
+  const totals = trackedEntryTotalsRange(data, tracking.startDate, bounds.end);
   const effectiveUsed = roundMoney(tracking.openingAdjustment + totals.netSpent);
 
   return {
     configured: true,
     monthKey,
+    cycleStartDate: bounds.start,
+    cycleEndDate: bounds.end,
     carryIn,
     income,
     housing,
@@ -314,9 +394,11 @@ export function calculateMonth(data, monthKey) {
     openingAdjustment: tracking.openingAdjustment,
     remaining: roundMoney(spendable - effectiveUsed),
     endingCarry: roundMoney(spendable - effectiveUsed),
-    baseDaily: roundMoney(spendable / dim),
+    baseDaily: roundMoney(spendable / Math.max(1, dim)),
     daysInMonth: dim,
-    trackingStartDay: tracking.startDay,
+    daysInCycle: dim,
+    trackingStartDay: tracking.startIndex,
+    trackingStartDate: tracking.startDate,
     trackingStartMode: tracking.startMode,
     priorNetSpending: tracking.priorNetSpending,
     expenses: cfg.expenses || [],
@@ -329,6 +411,7 @@ export function suggestedMonthValues(data, monthKey) {
   if (existing) return structuredClone(existing);
   const previousKeys = Object.keys(data.months || {}).filter((key) => key < monthKey).sort();
   const previous = previousKeys.length ? data.months[previousKeys.at(-1)] : null;
+  const bounds = cycleBoundsForMonth(data, monthKey);
   return {
     income: Number(previous?.income || 0),
     housing: Number(previous?.housing || 0),
@@ -337,7 +420,10 @@ export function suggestedMonthValues(data, monthKey) {
     planningWeeks: Number(previous?.planningWeeks || 4),
     payoutDaysPerWeek: Number(previous?.payoutDaysPerWeek || 5),
     expenses: structuredClone((data.recurringExpenses?.length ? data.recurringExpenses : previous?.expenses) || []),
-    trackingStartDay: 1,
+    cycleStartDate: bounds?.start,
+    cycleEndDate: bounds?.end,
+    trackingStartDate: bounds?.start,
+    trackingStartDay: Number(bounds?.start?.slice(-2) || 1),
     trackingStartMode: 'fresh',
     priorNetSpending: 0,
   };

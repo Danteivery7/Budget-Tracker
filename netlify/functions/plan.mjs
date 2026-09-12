@@ -1,7 +1,7 @@
 import { getStore } from '@netlify/blobs';
 import { isAuthenticated, json } from '../lib/auth.mjs';
 import { ensureSubscriptionShape } from '../lib/subscriptions-core.mjs';
-import { bootstrapPlanFromHistory, createPlanRevision, ensureMonthFromPlan, ensurePlanShape, resolvePlanForMonth } from '../lib/plan-core.mjs';
+import { bootstrapPlanFromHistory, createPlanRevision, cycleForDate, ensureCycleForDate, ensureMonthFromPlan, ensurePlanShape, resolvePlanForMonth } from '../lib/plan-core.mjs';
 
 const STORE_NAME = 'budget-tracker';
 const STATE_KEY = 'state';
@@ -10,13 +10,16 @@ function normalize(state = {}) {
   return ensurePlanShape(ensureSubscriptionShape(state));
 }
 
-function viewFor(state, month) {
-  const revision = resolvePlanForMonth(state, month);
+function viewFor(state, month, date = '') {
+  const cycle = date ? cycleForDate(state, date) : null;
+  const resolvedMonth = cycle?.cycleMonth || month;
+  const revision = resolvePlanForMonth(state, resolvedMonth);
   return {
-    month,
+    month: resolvedMonth,
+    cycle,
     revision,
     revisionCount: state.planRevisions.length,
-    monthConfigured: Boolean(state.months?.[month]),
+    monthConfigured: Boolean(state.months?.[resolvedMonth]),
     planSettings: state.planSettings || {},
   };
 }
@@ -32,13 +35,14 @@ async function mutate(store, action, payload = {}) {
     const current = await readState(store);
     const next = structuredClone(current.state);
     if (action === 'ensureMonth') ensureMonthFromPlan(next, String(payload.month || ''), new Date());
+    else if (action === 'ensureCycle') ensureCycleForDate(next, String(payload.date || ''), new Date());
     else if (action === 'bootstrap') bootstrapPlanFromHistory(next, new Date());
     else if (action === 'saveRevision') createPlanRevision(next, payload, new Date());
     else throw new Error('Unknown plan action.');
     next.updatedAt = new Date().toISOString();
     const options = current.exists ? { onlyIfMatch: current.etag } : { onlyIfNew: true };
     const result = await store.setJSON(STATE_KEY, next, options);
-    if (result.modified) return { state: next, view: viewFor(next, String(payload.month || payload.effectiveMonth || '')), etag: result.etag };
+    if (result.modified) return { state: next, view: viewFor(next, String(payload.month || payload.effectiveMonth || ''), String(payload.date || payload.effectiveDate || '')), etag: result.etag };
   }
   throw new Error('Your data changed on another device. Please try again.');
 }
@@ -51,7 +55,8 @@ export default async (request) => {
     if (request.method === 'GET' && pathname.endsWith('/state')) {
       const { state, etag } = await readState(store);
       const month = searchParams.get('month') || '';
-      return json({ state, view: viewFor(state, month), etag });
+      const date = searchParams.get('date') || '';
+      return json({ state, view: viewFor(state, month, date), etag });
     }
     if (request.method === 'POST' && pathname.endsWith('/mutate')) {
       let body;

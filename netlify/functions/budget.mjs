@@ -3,15 +3,20 @@ import { getStore } from '@netlify/blobs';
 import { isAuthenticated, json } from '../lib/auth.mjs';
 import { copyCardsForImport } from '../lib/cards-core.mjs';
 import { copySubscriptionsForImport, ensureSubscriptionShape } from '../lib/subscriptions-core.mjs';
+import { copyPlanForImport, cycleForDate, ensurePlanShape } from '../lib/plan-core.mjs';
 
 const STORE_NAME = 'budget-tracker';
 const STATE_KEY = 'state';
 const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 const DATE_RE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
 
+function normalize(state = {}) {
+  return ensurePlanShape(ensureSubscriptionShape(state));
+}
+
 function freshState() {
   const now = new Date().toISOString();
-  return ensureSubscriptionShape({ version: 3, createdAt: now, updatedAt: now, recurringExpenses: [], months: {}, dailySpending: {} });
+  return normalize({ version: 3, createdAt: now, updatedAt: now, recurringExpenses: [], months: {}, dailySpending: {} });
 }
 
 function finiteMoney(value, label) {
@@ -101,8 +106,15 @@ function linkedCardTotals(state, date) {
   };
 }
 
+function configForDate(state, date) {
+  const cycle = cycleForDate(state, date);
+  if (cycle?.cycleMonth && state.months?.[cycle.cycleMonth]) return { cfg: state.months[cycle.cycleMonth], cycle };
+  const month = date.slice(0, 7);
+  return { cfg: state.months?.[month] || null, cycle: null };
+}
+
 function applyMutation(state, action, payload = {}) {
-  const next = ensureSubscriptionShape(structuredClone(state || freshState()));
+  const next = normalize(structuredClone(state || freshState()));
   next.version = 3;
   next.months ||= {};
   next.dailySpending ||= {};
@@ -113,30 +125,33 @@ function applyMutation(state, action, payload = {}) {
     if (!MONTH_RE.test(month)) throw new Error('Invalid month.');
     const tracking = cleanTracking(payload, month);
     const allocation = cleanAllocation(payload);
-    const conflictingEntry = Object.keys(next.dailySpending || {}).find((date) =>
-      date.startsWith(`${month}-`) && Number(date.slice(-2)) < tracking.trackingStartDay
-    );
-    if (conflictingEntry) {
-      throw new Error(`Tracking cannot start after an existing entry (${conflictingEntry}). Delete that entry or choose an earlier start date.`);
-    }
+    const existing = next.months[month] || {};
+    const trackingStartDate = cleanText(payload.trackingStartDate, 10) || existing.trackingStartDate || `${month}-${String(tracking.trackingStartDay).padStart(2, '0')}`;
+    const conflictingEntry = Object.keys(next.dailySpending || {}).find((date) => {
+      if (existing.cycleStartDate && existing.cycleEndDate) return date >= existing.cycleStartDate && date < trackingStartDate;
+      return date.startsWith(`${month}-`) && Number(date.slice(-2)) < tracking.trackingStartDay;
+    });
+    if (conflictingEntry) throw new Error(`Tracking cannot start after an existing entry (${conflictingEntry}). Delete that entry or choose an earlier start date.`);
     next.months[month] = {
+      ...existing,
       income: finiteMoney(payload.income, 'Income'),
       housing: finiteMoney(payload.housing, 'Housing'),
       reinvestment: finiteMoney(payload.reinvestment, 'Reinvestment'),
       ...allocation,
       expenses: Array.isArray(payload.expenses) ? payload.expenses.map(cleanExpense) : [],
       ...tracking,
+      trackingStartDate,
+      cycleStartDate: existing.cycleStartDate || cleanText(payload.cycleStartDate, 10) || trackingStartDate,
+      cycleEndDate: existing.cycleEndDate || cleanText(payload.cycleEndDate, 10) || null,
       updatedAt: new Date().toISOString(),
     };
   } else if (action === 'saveDaily') {
     const date = cleanText(payload.date, 10);
     validateDateKey(date);
-    const month = date.slice(0, 7);
-    const cfg = next.months[month];
-    if (!cfg) throw new Error('Set up this month before logging daily spending.');
-    const startDay = Number(cfg.trackingStartDay || 1);
-    const day = Number(date.slice(-2));
-    if (day < startDay) throw new Error('That date is before this month’s tracking start date.');
+    const { cfg, cycle } = configForDate(next, date);
+    if (!cfg) throw new Error('Set up the active financial cycle before logging daily spending.');
+    const trackingStartDate = cfg.trackingStartDate || cycle?.start || `${date.slice(0, 7)}-${String(cfg.trackingStartDay || 1).padStart(2, '0')}`;
+    if (date < trackingStartDate) throw new Error('That date is before this financial cycle’s tracking start date.');
     const cleaned = cleanDailyEntry(payload);
     const linked = linkedCardTotals(next, date);
     if (cleaned.amount + 0.005 < linked.purchases) throw new Error(`This day already has ${linked.purchases.toFixed(2)} in card-linked purchases. The daily total cannot be lower than that.`);
@@ -182,17 +197,21 @@ function applyMutation(state, action, payload = {}) {
         ...allocation,
         expenses: Array.isArray(cfg?.expenses) ? cfg.expenses.map(cleanExpense) : [],
         ...tracking,
+        trackingStartDate: cleanText(cfg?.trackingStartDate, 10) || null,
+        cycleStartDate: cleanText(cfg?.cycleStartDate, 10) || null,
+        cycleEndDate: cleanText(cfg?.cycleEndDate, 10) || null,
+        planRevisionId: cleanText(cfg?.planRevisionId, 100) || null,
+        inheritedPlan: cfg?.inheritedPlan === true,
         updatedAt: cleanText(cfg?.updatedAt, 40) || new Date().toISOString(),
       };
     }
     for (const [date, entry] of Object.entries(imported.dailySpending || {})) {
       try { validateDateKey(date); } catch { continue; }
-      const cfg = validated.months[date.slice(0, 7)];
-      if (cfg && Number(date.slice(-2)) < Number(cfg.trackingStartDay || 1)) continue;
       validated.dailySpending[date] = cleanDailyEntry(entry, true);
     }
     copyCardsForImport(imported, validated);
     copySubscriptionsForImport(imported, validated);
+    copyPlanForImport(imported, validated);
     validated.updatedAt = new Date().toISOString();
     return validated;
   } else {
@@ -206,7 +225,7 @@ function applyMutation(state, action, payload = {}) {
 async function readState(store) {
   const entry = await store.getWithMetadata(STATE_KEY, { consistency: 'strong', type: 'json' });
   if (!entry) return { state: freshState(), etag: null, exists: false };
-  return { state: ensureSubscriptionShape(entry.data), etag: entry.etag, exists: true };
+  return { state: normalize(entry.data), etag: entry.etag, exists: true };
 }
 
 async function mutate(store, action, payload) {
