@@ -14,6 +14,7 @@
   <link rel="stylesheet" href="/subscriptions.css" />
   <link rel="stylesheet" href="/plan-change.css" />
   <link rel="stylesheet" href="/banking.css" />
+  <link rel="stylesheet" href="/advanced-core.css" />
 </head>
 <body>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
@@ -25,7 +26,10 @@
       <p class="login-copy">A private operating system for monthly income, protected targets, spending decisions, and financial planning.</p>
       <div id="notConfigured" class="setup-warning" hidden><strong>One setup step remains.</strong><span>Add a <code>BUDGET_TRACKER_PASSWORD</code> environment variable in Netlify, then redeploy.</span></div>
       <form id="loginForm" class="login-form"><label for="passwordInput">Access code</label><input id="passwordInput" name="password" type="password" autocomplete="current-password" placeholder="Enter your private access code" required /><button class="button primary wide" type="submit">Unlock finance console</button></form>
+      <div id="passkeyLoginNote" class="login-passkey-divider" hidden>or</div>
+      <button id="passkeyLoginButton" class="button ghost wide" type="button" hidden>Use Face ID / Windows Hello / passkey</button>
       <p class="login-note">Your access code is checked on the server and is never stored in this page.</p>
+      <p class="login-passkey-note" id="passkeyPrivacyNote" hidden>Passkeys keep their private key on your device or credential provider. Budget Tracker receives only a signed proof.</p>
     </div>
   </section>
 
@@ -75,7 +79,9 @@
 
   <script src="/plan-bootstrap.js"></script>
   <script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
+  <script src="/ledger-client.js"></script>
   <script type="module" src="/app.js"></script>
+  <script type="module" src="/passkey-login.js"></script>
   <script src="/refunds.js"></script>
   <script src="/start.js"></script>
   <script src="/allocations.js"></script>
@@ -85,6 +91,9 @@
   <script type="module" src="/setup-wizard.js"></script>
   <script type="module" src="/plan-change.js"></script>
   <script type="module" src="/banking.js"></script>
+  <script type="module" src="/bank-passkey-enhancement.js"></script>
+  <script type="module" src="/intelligence.js"></script>
+  <script type="module" src="/security-center.js"></script>
   <script src="/ui-polish.js"></script>
   <script type="module" src="/fiscal-runtime.js"></script>
 </body>
