@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { getStore } from '@netlify/blobs';
-import { discoveryTransaction, normalizePlaidTransaction, publicConnectionSummary, reconcileSyncedTransactions, sanitizePlaidAccount } from './bank-core.mjs';
+import { browserTransaction, discoveryTransaction, normalizePlaidTransaction, publicConnectionSummary, reconcileSyncedTransactions, sanitizePlaidAccount } from './bank-core.mjs';
 import { readBankData, readVault, writeBankData, writeVault, deleteBankData, connectionById, connectionByItemId } from './bank-store.mjs';
 import { plaidHistoryDays, plaidRequest, plaidWebhookUrl } from './plaid-client.mjs';
 import { ensureSubscriptionShape, markLinkedBankFeedDisconnected, refreshSubscriptionCandidatesFromLinkedBankRows } from './subscriptions-core.mjs';
@@ -193,7 +193,7 @@ export async function recentTransactions(connectionId, limit = 25) {
   const vault = await readVault();
   if (!connectionById(vault, connectionId)) throw new Error('Bank connection not found.');
   const data = await readBankData(connectionId);
-  return (data.transactions || []).slice(0, Math.max(1, Math.min(50, Number(limit || 25))));
+  return (data.transactions || []).slice(0, Math.max(1, Math.min(50, Number(limit || 25)))).map(browserTransaction);
 }
 
 export async function disconnectConnection(connectionId) {
