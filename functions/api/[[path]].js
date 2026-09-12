@@ -9,6 +9,7 @@ import passkeysHandler from '../../server/functions/passkeys.mjs';
 import plaidWebhookHandler from '../../server/functions/plaid-webhook.mjs';
 import planHandler from '../../server/functions/plan.mjs';
 import subscriptionsHandler from '../../server/functions/subscriptions.mjs';
+import systemHandler from '../../server/functions/system.mjs';
 import { enforceRateLimit } from '../../server/lib/rate-limit.mjs';
 
 const API_HEADERS = {
@@ -44,6 +45,7 @@ function handlerFor(pathname) {
   if (pathname.startsWith('/api/passkeys/')) return passkeysHandler;
   if (pathname.startsWith('/api/plan/')) return planHandler;
   if (pathname.startsWith('/api/subscriptions/')) return subscriptionsHandler;
+  if (pathname.startsWith('/api/system/')) return systemHandler;
   return null;
 }
 
@@ -59,6 +61,10 @@ async function rateLimit(request, pathname) {
   if (pathname.startsWith('/api/passkeys/')) {
     const passkeys = await enforceRateLimit(request, { scope:'passkeys', limit:40, windowSeconds:60 });
     if (!passkeys.allowed) return passkeys;
+  }
+  if (pathname.startsWith('/api/system/') && request.method !== 'GET') {
+    const system = await enforceRateLimit(request, { scope:'system-mutations', limit:20, windowSeconds:60 });
+    if (!system.allowed) return system;
   }
   return null;
 }
