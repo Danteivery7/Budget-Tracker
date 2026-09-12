@@ -8,6 +8,7 @@
     "check": "node --check app.js && node --check refunds.js && node --check start.js && node --check allocations.js && node --check cards.js && node --check engine.js && node --check financial-cycle.js && node --check fiscal-runtime.js && node --check purchase-engine.js && node --check purchase-planner.js && node --check setup-engine.js && node --check setup-wizard.js && node --check ui-polish.js && node --check subscription-engine.js && node --check subscriptions.js && node --check plan-bootstrap.js && node --check plan-change.js && node --check banking.js && node --check plaid-oauth.js && node --check netlify/functions/auth.mjs && node --check netlify/functions/budget.mjs && node --check netlify/functions/cards.mjs && node --check netlify/functions/subscriptions.mjs && node --check netlify/functions/plan.mjs && node --check netlify/functions/bank.mjs && node --check netlify/functions/plaid-webhook.mjs && node --check netlify/lib/auth.mjs && node --check netlify/lib/cards-core.mjs && node --check netlify/lib/subscriptions-core.mjs && node --check netlify/lib/plan-core.mjs && node --check netlify/lib/bank-auth.mjs && node --check netlify/lib/bank-core.mjs && node --check netlify/lib/bank-crypto.mjs && node --check netlify/lib/bank-store.mjs && node --check netlify/lib/bank-service.mjs && node --check netlify/lib/plaid-client.mjs && node --check netlify/lib/plaid-webhook.mjs && node --check sw.js"
   },
   "dependencies": {
-    "@netlify/blobs": "10.7.13"
+    "@netlify/blobs": "10.7.13",
+    "jose": "6.2.12"
   }
 }
