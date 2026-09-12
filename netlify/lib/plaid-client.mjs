@@ -24,6 +24,15 @@ export function plaidHistoryDays() {
   return Math.max(30, Math.min(730, Math.trunc(raw)));
 }
 
+export function plaidRedirectUri() {
+  const raw = String(process.env.PLAID_REDIRECT_URI || '').trim();
+  if (!raw) return null;
+  const url = new URL(raw);
+  if (url.protocol !== 'https:') throw new Error('Plaid redirect URI must use HTTPS.');
+  if (url.search || url.hash) throw new Error('Plaid redirect URI cannot contain query parameters or a fragment.');
+  return url.toString();
+}
+
 export async function plaidRequest(path, body = {}, { timeoutMs = 15_000 } = {}) {
   if (!plaidConfigured()) throw new Error('Plaid is not configured on the server.');
   const env = plaidEnvironment();
