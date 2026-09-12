@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "test": "node --test",
-    "check": "node --check app.js && node --check refunds.js && node --check start.js && node --check allocations.js && node --check cards.js && node --check engine.js && node --check purchase-engine.js && node --check purchase-planner.js && node --check setup-engine.js && node --check setup-wizard.js && node --check ui-polish.js && node --check subscription-engine.js && node --check subscriptions.js && node --check netlify/functions/auth.mjs && node --check netlify/functions/budget.mjs && node --check netlify/functions/cards.mjs && node --check netlify/functions/subscriptions.mjs && node --check netlify/lib/auth.mjs && node --check netlify/lib/cards-core.mjs && node --check netlify/lib/subscriptions-core.mjs && node --check sw.js"
+    "check": "node --check app.js && node --check refunds.js && node --check start.js && node --check allocations.js && node --check cards.js && node --check engine.js && node --check purchase-engine.js && node --check purchase-planner.js && node --check setup-engine.js && node --check setup-wizard.js && node --check ui-polish.js && node --check subscription-engine.js && node --check subscriptions.js && node --check plan-bootstrap.js && node --check plan-change.js && node --check netlify/functions/auth.mjs && node --check netlify/functions/budget.mjs && node --check netlify/functions/cards.mjs && node --check netlify/functions/subscriptions.mjs && node --check netlify/functions/plan.mjs && node --check netlify/lib/auth.mjs && node --check netlify/lib/cards-core.mjs && node --check netlify/lib/subscriptions-core.mjs && node --check netlify/lib/plan-core.mjs && node --check sw.js"
   },
   "dependencies": {
     "@netlify/blobs": "10.7.13"
