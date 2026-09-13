@@ -1,0 +1,602 @@
+/* Final responsive layer. Loaded after every feature stylesheet so device rules stay consistent. */
+
+html {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+.app-shell,
+.main-panel,
+.topbar,
+.view,
+.card,
+.hero-grid,
+.summary-grid,
+.form-grid,
+.two-col,
+.setup-shell,
+.setup-main,
+.change-plan-shell,
+.change-plan-main,
+.advanced-shell,
+.advanced-panel,
+.bank-shell,
+.bank-panel,
+.subscriptions-shell,
+.subscription-panel,
+.system-shell,
+.system-grid,
+.system-fields {
+  min-width: 0;
+}
+
+img,
+svg,
+canvas,
+video {
+  max-width: 100%;
+}
+
+pre,
+code,
+.hash-value,
+.system-code {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+input,
+select,
+textarea,
+button {
+  max-width: 100%;
+}
+
+/* Compact laptop / MacBook layout. */
+@media (max-width: 1180px) and (min-width: 761px) {
+  :root { --sidebar: 220px; }
+
+  .sidebar {
+    padding: 22px 13px;
+  }
+
+  .brand-row {
+    padding-inline: 6px;
+  }
+
+  .brand-row span {
+    font-size: 9px;
+  }
+
+  .nav-item {
+    padding: 10px 10px;
+    font-size: 11px;
+  }
+
+  .nav-section-label {
+    padding-inline: 10px;
+  }
+
+  .main-panel {
+    padding: 28px 22px 64px;
+  }
+
+  .topbar,
+  .view {
+    max-width: 100%;
+  }
+
+  .hero-grid {
+    grid-template-columns: minmax(0, 1.15fr) minmax(280px, .85fr);
+  }
+
+  .summary-grid,
+  .subscriptions-summary,
+  .bank-security-grid,
+  .advanced-metrics.four {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .system-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .rule-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* Tablet and phone shell. */
+@media (max-width: 760px) {
+  :root {
+    --radius: 11px;
+    --radius-sm: 8px;
+  }
+
+  body {
+    min-width: 0;
+    padding-bottom: 0;
+  }
+
+  .sidebar {
+    display: none !important;
+  }
+
+  .main-panel {
+    width: 100%;
+    margin-left: 0 !important;
+    padding: calc(16px + env(safe-area-inset-top)) 12px calc(98px + env(safe-area-inset-bottom)) !important;
+  }
+
+  .topbar {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start !important;
+    gap: 10px;
+    margin: 0 0 16px;
+    padding: 0 2px !important;
+  }
+
+  .topbar h1 {
+    max-width: 100%;
+    font-size: clamp(24px, 8vw, 31px) !important;
+    line-height: 1.05;
+    overflow-wrap: anywhere;
+  }
+
+  .topbar-right {
+    width: 100%;
+  }
+
+  .date-chip {
+    display: inline-flex !important;
+    min-height: 32px;
+    font-size: 10px;
+    padding-inline: 10px;
+  }
+
+  .view {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .mobile-nav {
+    position: fixed;
+    z-index: 60;
+    left: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    width: 100%;
+    max-width: 100vw;
+    display: grid !important;
+    grid-template-columns: none !important;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(76px, 1fr);
+    gap: 3px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    padding: 6px 7px calc(6px + env(safe-area-inset-bottom)) !important;
+    border-width: 1px 0 0 !important;
+    border-radius: 0 !important;
+    background: rgba(13, 13, 15, .97) !important;
+    box-shadow: 0 -10px 30px rgba(0, 0, 0, .28) !important;
+  }
+
+  .mobile-nav::-webkit-scrollbar {
+    display: none;
+  }
+
+  .mobile-nav-item {
+    flex: none !important;
+    width: auto;
+    min-width: 76px !important;
+    min-height: 48px;
+    padding: 6px 7px !important;
+    border-radius: 8px;
+    font-size: 9px !important;
+    line-height: 1.2;
+    white-space: normal;
+    text-align: center;
+    touch-action: manipulation;
+  }
+
+  .card {
+    max-width: 100%;
+    border-radius: var(--radius);
+  }
+
+  .hero-grid,
+  .two-col,
+  .form-grid,
+  .setup-form-grid,
+  .setup-choice-grid,
+  .setup-review-grid,
+  .change-timing-grid,
+  .candidate-grid,
+  .subscription-controls,
+  .routing-policy,
+  .rule-grid,
+  .review-controls,
+  .bank-security-grid,
+  .bank-account-grid,
+  .system-grid,
+  .system-fields,
+  .advanced-form {
+    grid-template-columns: 1fr !important;
+  }
+
+  .hero-grid,
+  .bank-shell,
+  .subscriptions-shell,
+  .advanced-shell,
+  .system-shell {
+    gap: 10px;
+  }
+
+  .hero-card {
+    min-height: 0 !important;
+    padding: 20px !important;
+    gap: 22px;
+  }
+
+  .hero-amount {
+    margin-top: 8px;
+    font-size: clamp(42px, 14vw, 58px) !important;
+    line-height: 1;
+    overflow-wrap: anywhere;
+  }
+
+  .entry-card,
+  .section-card,
+  .form-card,
+  .subscription-panel,
+  .advanced-panel,
+  .bank-panel,
+  .bank-security-card,
+  .bank-account {
+    padding: 16px !important;
+  }
+
+  .summary-grid,
+  .subscriptions-summary,
+  .advanced-metrics,
+  .advanced-metrics.four {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 8px;
+  }
+
+  .metric-card,
+  .subscription-metric,
+  .advanced-metrics > div {
+    min-width: 0;
+    padding: 14px !important;
+  }
+
+  .metric-value,
+  .subscription-metric strong,
+  .advanced-metrics strong {
+    overflow-wrap: anywhere;
+  }
+
+  .section-head,
+  .subscription-panel-head,
+  .bank-panel-head,
+  .bank-connection-head,
+  .advanced-panel-head,
+  .system-section-title {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 10px !important;
+  }
+
+  .progress-meta {
+    flex-direction: column;
+    gap: 5px;
+  }
+
+  .form-actions,
+  .candidate-actions,
+  .bank-connection-actions,
+  .system-actions,
+  .setup-actions,
+  .change-plan-actions,
+  .setup-actions-right {
+    width: 100%;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .form-actions .button,
+  .candidate-actions .button,
+  .bank-connection-actions .button,
+  .system-actions .button,
+  .setup-actions .button,
+  .change-plan-actions .button {
+    flex: 1 1 140px;
+  }
+
+  .setup-shell,
+  .change-plan-shell {
+    grid-template-columns: 1fr !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+  }
+
+  .setup-rail,
+  .change-plan-rail {
+    padding: 16px !important;
+    border-right: 0 !important;
+    border-bottom: 1px solid #26262a;
+  }
+
+  .setup-step-list,
+  .change-plan-steps {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: 42px;
+    grid-template-columns: none !important;
+    justify-content: start;
+    overflow-x: auto;
+    gap: 4px;
+    padding-bottom: 3px;
+    scrollbar-width: none;
+  }
+
+  .setup-step-list::-webkit-scrollbar,
+  .change-plan-steps::-webkit-scrollbar {
+    display: none;
+  }
+
+  .setup-main,
+  .change-plan-main {
+    padding: 20px 16px !important;
+  }
+
+  .setup-title {
+    font-size: clamp(27px, 9vw, 34px) !important;
+  }
+
+  .setup-cost-row,
+  .expense-row {
+    max-width: 100%;
+  }
+
+  .subscription-row {
+    grid-template-columns: 1fr !important;
+    gap: 9px;
+  }
+
+  .subscription-row .subscription-actions {
+    grid-column: auto !important;
+  }
+
+  .advanced-row,
+  .audit-event,
+  .advanced-review-main,
+  .bank-private-note,
+  .feed-status,
+  .system-check {
+    min-width: 0;
+  }
+
+  .advanced-row,
+  .advanced-review-main {
+    flex-direction: column;
+    align-items: stretch !important;
+  }
+
+  .advanced-row .button,
+  .advanced-row button {
+    width: 100%;
+  }
+
+  .bank-connection,
+  .candidate-card,
+  .subscription-row,
+  .advanced-row,
+  .audit-event,
+  .advanced-review,
+  .system-check,
+  .system-result {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+
+  .bank-account-balance {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .bank-transactions {
+    padding-inline: 14px;
+  }
+
+  .bank-transaction {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px;
+  }
+
+  .system-result {
+    overflow-x: auto;
+    white-space: pre-wrap;
+  }
+
+  .calendar-card {
+    width: 100%;
+    padding: 8px !important;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+  }
+
+  .calendar-weekdays,
+  .calendar-grid {
+    min-width: 0;
+    gap: 3px !important;
+  }
+
+  .calendar-weekdays div {
+    padding: 4px 1px;
+    font-size: 8px;
+  }
+
+  .calendar-day {
+    min-width: 0;
+    min-height: 64px !important;
+    padding: 6px 4px !important;
+  }
+
+  .day-number {
+    font-size: 9px;
+  }
+
+  .day-spent {
+    font-size: 10px !important;
+    overflow-wrap: anywhere;
+  }
+
+  .day-caption {
+    display: none;
+  }
+
+  .history-controls {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .history-controls input {
+    width: min(100%, 180px) !important;
+  }
+
+  .day-dialog {
+    width: calc(100vw - 20px) !important;
+    max-width: calc(100vw - 20px) !important;
+    max-height: calc(100dvh - 20px);
+    overflow: auto;
+    margin: auto;
+  }
+
+  .dialog-card {
+    padding: 18px !important;
+    max-height: calc(100dvh - 20px);
+    overflow-y: auto;
+  }
+
+  .dialog-actions {
+    flex-direction: column-reverse;
+  }
+
+  .dialog-actions .button {
+    width: 100%;
+  }
+
+  .login-screen {
+    min-height: 100dvh;
+    padding: calc(14px + env(safe-area-inset-top)) 12px calc(14px + env(safe-area-inset-bottom));
+  }
+
+  .login-shell {
+    width: 100% !important;
+    max-width: 440px;
+    padding: 26px 20px !important;
+    border-radius: 12px !important;
+  }
+
+  .login-shell h1 {
+    font-size: clamp(30px, 10vw, 36px) !important;
+  }
+
+  .toast {
+    top: calc(10px + env(safe-area-inset-top));
+    left: 10px;
+    right: 10px;
+    max-width: none;
+  }
+}
+
+/* Narrow phones: favor one readable column over dense dashboards. */
+@media (max-width: 520px) {
+  .main-panel {
+    padding-inline: 10px !important;
+  }
+
+  .summary-grid,
+  .subscriptions-summary,
+  .advanced-metrics,
+  .advanced-metrics.four {
+    grid-template-columns: 1fr !important;
+  }
+
+  .metric-value {
+    font-size: 24px !important;
+  }
+
+  .bank-account-balance {
+    grid-template-columns: 1fr;
+  }
+
+  .bank-transaction {
+    grid-template-columns: 1fr;
+  }
+
+  .bank-transaction-amount {
+    justify-self: start;
+  }
+
+  .setup-cost-row,
+  .expense-row {
+    grid-template-columns: 1fr !important;
+  }
+
+  .setup-remove,
+  .remove-expense {
+    width: 100% !important;
+  }
+
+  .change-review-row {
+    grid-template-columns: 1fr !important;
+  }
+
+  .change-review-row small {
+    grid-column: auto !important;
+    text-align: left !important;
+  }
+
+  .calendar-card {
+    overflow-x: auto;
+  }
+
+  .calendar-weekdays,
+  .calendar-grid {
+    min-width: 350px;
+  }
+
+  .mobile-nav {
+    grid-auto-columns: 82px;
+  }
+}
+
+/* Very short phone landscape screens still leave enough space above the dock. */
+@media (max-width: 760px) and (max-height: 500px) and (orientation: landscape) {
+  .main-panel {
+    padding-bottom: calc(78px + env(safe-area-inset-bottom)) !important;
+  }
+
+  .mobile-nav-item {
+    min-height: 40px;
+  }
+}
