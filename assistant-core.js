@@ -71,7 +71,8 @@ export function buildAssistantSnapshot(state, dateKey) {
   const futureWeekDays = daysBetween(dateKey, effectiveWeekEnd);
   const todayRemaining = roundMoney(Math.max(0, day.afterTodayBalance));
   const cycleRemaining = roundMoney(Math.max(0, cycle.remaining));
-  const weekRemaining = roundMoney(Math.min(cycleRemaining, Math.max(0, todayRemaining + day.baseDaily * futureWeekDays)));
+  const exactDailyRate = Number(cycle.spendable || 0) / Math.max(1, Number(day.daysInCycle || cycle.daysInCycle || 1));
+  const weekRemaining = roundMoney(Math.min(cycleRemaining, Math.max(0, todayRemaining + exactDailyRate * futureWeekDays)));
 
   return {
     ready:true,
