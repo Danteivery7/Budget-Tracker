@@ -1,4 +1,5 @@
 import { withCloudflareEnv } from '@netlify/blobs';
+import assistantHandler from '../../server/functions/assistant.mjs';
 import authHandler from '../../server/functions/auth.mjs';
 import bankHandler from '../../server/functions/bank.mjs';
 import budgetHandler from '../../server/functions/budget.mjs';
@@ -36,6 +37,7 @@ function secure(response) {
 
 function handlerFor(pathname) {
   if (pathname === '/api/plaid/webhook') return plaidWebhookHandler;
+  if (pathname.startsWith('/api/assistant/')) return assistantHandler;
   if (pathname.startsWith('/api/auth/')) return authHandler;
   if (pathname.startsWith('/api/bank/')) return bankHandler;
   if (pathname.startsWith('/api/budget/')) return budgetHandler;
@@ -61,6 +63,10 @@ async function rateLimit(request, pathname) {
   if (pathname.startsWith('/api/passkeys/')) {
     const passkeys = await enforceRateLimit(request, { scope:'passkeys', limit:40, windowSeconds:60 });
     if (!passkeys.allowed) return passkeys;
+  }
+  if (pathname.startsWith('/api/assistant/')) {
+    const assistant = await enforceRateLimit(request, { scope:'assistant-readonly', limit:60, windowSeconds:60 });
+    if (!assistant.allowed) return assistant;
   }
   if (pathname.startsWith('/api/system/') && request.method !== 'GET') {
     const system = await enforceRateLimit(request, { scope:'system-mutations', limit:20, windowSeconds:60 });
